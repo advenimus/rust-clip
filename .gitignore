@@ -8,3 +8,6 @@
 .idea/
 .vscode/
 .claude/
+
+# Tauri generated
+crates/rustclip-client-gui/gen/

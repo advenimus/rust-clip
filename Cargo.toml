@@ -4,6 +4,7 @@ members = [
     "crates/rustclip-shared",
     "crates/rustclip-server",
     "crates/rustclip-client",
+    "crates/rustclip-client-gui",
 ]
 
 [workspace.package]
@@ -79,6 +80,13 @@ objc2-app-kit = { version = "0.3", default-features = false, features = [
 ] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 url = "2"
+
+# Tauri v2 for the tray GUI client.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-build = { version = "2", features = [] }
+tauri-plugin-autostart = "2"
+tauri-plugin-notification = "2"
+tauri-plugin-opener = "2"
 
 # dev / test
 tempfile = "3"

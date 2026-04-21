@@ -39,14 +39,21 @@ jobs:
         with:
           key: ${{ matrix.target }}
 
-      - name: Install Linux clipboard deps
+      - name: Install Linux clipboard + Tauri deps
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+          sudo apt-get install -y \
+            libxcb1-dev libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
+            libwebkit2gtk-4.1-dev libjavascriptcoregtk-4.1-dev \
+            libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
+            libsoup-3.0-dev
 
-      - name: Build client
+      - name: Build CLI client
         run: cargo build --release --locked --target ${{ matrix.target }} -p rustclip-client
+
+      - name: Build desktop GUI
+        run: cargo build --release --locked --target ${{ matrix.target }} -p rustclip-client-gui
 
       - name: Package (Unix)
         if: runner.os != 'Windows'
@@ -54,6 +61,7 @@ jobs:
         run: |
           staging=$(mktemp -d)
           cp "target/${{ matrix.target }}/release/rustclip-client" "$staging/"
+          cp "target/${{ matrix.target }}/release/rustclip-client-gui" "$staging/"
           cp README.md "$staging/" 2>/dev/null || true
           tar -C "$staging" -czf "${{ matrix.archive }}" .
 
@@ -63,6 +71,7 @@ jobs:
         run: |
           $staging = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "pkg")
           Copy-Item "target/${{ matrix.target }}/release/rustclip-client.exe" $staging
+          Copy-Item "target/${{ matrix.target }}/release/rustclip-client-gui.exe" $staging
           if (Test-Path README.md) { Copy-Item README.md $staging }
           Compress-Archive -Path "$staging/*" -DestinationPath "${{ matrix.archive }}"
 

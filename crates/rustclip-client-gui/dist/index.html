@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RustClip</title>
+  <link rel="stylesheet" href="app.css" />
+</head>
+<body class="theme-dark">
+  <header class="topbar">
+    <span class="brand"><span class="brand-mark">//</span> <span class="brand-name">RustClip</span></span>
+    <nav class="tabs">
+      <a href="#account" data-tab="account">Account</a>
+      <a href="#history" data-tab="history">History</a>
+    </nav>
+  </header>
+
+  <main id="main">
+    <section id="panel-account" class="panel hidden">
+      <div id="account-status"></div>
+      <div id="auth-forms">
+        <div class="toggle">
+          <button id="mode-enroll" class="btn btn-ghost">Enroll new device</button>
+          <button id="mode-login" class="btn btn-ghost">Login (existing user)</button>
+        </div>
+        <form id="form-enroll" class="auth-form">
+          <label>Server URL<input type="text" name="server_url" placeholder="https://clip.example.com" required></label>
+          <label>Enrollment token<input type="text" name="enrollment_token" required></label>
+          <label>Device name<input type="text" name="device_name" placeholder="(defaults to hostname)"></label>
+          <label>Password<input type="password" name="password" required minlength="8"></label>
+          <label>Confirm password<input type="password" name="confirm_password" required minlength="8"></label>
+          <button type="submit" class="btn btn-primary">Enroll device</button>
+        </form>
+        <form id="form-login" class="auth-form hidden">
+          <label>Server URL<input type="text" name="server_url" placeholder="https://clip.example.com" required></label>
+          <label>Username<input type="text" name="username" required></label>
+          <label>Device name<input type="text" name="device_name" placeholder="(defaults to hostname)"></label>
+          <label>Password<input type="password" name="password" required></label>
+          <button type="submit" class="btn btn-primary">Log in</button>
+        </form>
+      </div>
+      <div class="settings-group">
+        <label class="checkbox">
+          <input type="checkbox" id="autostart-toggle"> Start RustClip on login
+        </label>
+      </div>
+      <div id="account-msg" class="status"></div>
+    </section>
+
+    <section id="panel-history" class="panel hidden">
+      <div class="panel-head">
+        <h2>Clipboard history</h2>
+        <div>
+          <button id="refresh-history" class="btn btn-ghost">Refresh</button>
+          <button id="clear-history" class="btn btn-danger">Clear all</button>
+        </div>
+      </div>
+      <div id="history-list"></div>
+    </section>
+  </main>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>

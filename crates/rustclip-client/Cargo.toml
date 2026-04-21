@@ -5,6 +5,10 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[lib]
+name = "rustclip_client"
+path = "src/lib.rs"
+
 [[bin]]
 name = "rustclip-client"
 path = "src/main.rs"

@@ -1,16 +1,6 @@
-mod clipboard;
-mod clipboard_files;
-mod commands;
-mod crypto;
-mod files;
-mod history;
-mod http;
-mod image_codec;
-mod keychain;
-mod sync;
-
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use rustclip_client::commands;
 use tracing_subscriber::{EnvFilter, fmt};
 
 #[derive(Parser, Debug)]
