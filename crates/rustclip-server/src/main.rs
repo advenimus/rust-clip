@@ -78,9 +78,10 @@ async fn main() -> Result<()> {
     sweeper::spawn(pool.clone(), settings.clone());
 
     let auth_limiter = RateLimiter::new();
-    auth_limiter
-        .clone()
-        .spawn_pruner(rate_limit::AUTH_API_LIMIT, std::time::Duration::from_secs(300));
+    auth_limiter.clone().spawn_pruner(
+        rate_limit::AUTH_API_LIMIT,
+        std::time::Duration::from_secs(300),
+    );
 
     let state = AppState {
         db: pool,
@@ -190,7 +191,10 @@ async fn serve_app_css() -> impl IntoResponse {
 
 async fn serve_admin_js() -> impl IntoResponse {
     (
-        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        [(
+            header::CONTENT_TYPE,
+            "application/javascript; charset=utf-8",
+        )],
         ADMIN_JS,
     )
 }

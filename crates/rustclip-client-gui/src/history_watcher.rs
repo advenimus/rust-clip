@@ -47,9 +47,7 @@ async fn run(app: AppHandle) {
 
 fn latest_incoming() -> anyhow::Result<Option<HistoryEntryView>> {
     let items = rustclip_client::gui_api::list_history(5)?;
-    Ok(items
-        .into_iter()
-        .find(|it| it.direction == "incoming"))
+    Ok(items.into_iter().find(|it| it.direction == "incoming"))
 }
 
 fn latest_incoming_id() -> Option<String> {
@@ -59,30 +57,12 @@ fn latest_incoming_id() -> Option<String> {
 fn notify_and_emit(app: &AppHandle, item: &HistoryEntryView) {
     let _ = app.emit("history-updated", ());
     let (title, body) = match item.kind.as_str() {
-        "text" => (
-            "New clipboard item".to_string(),
-            trim(&item.preview, 140),
-        ),
-        "image" => (
-            "New clipboard image".to_string(),
-            item.preview.clone(),
-        ),
-        "bundle" => (
-            "New files synced".to_string(),
-            item.preview.clone(),
-        ),
-        other => (
-            format!("New clip ({other})"),
-            item.preview.clone(),
-        ),
+        "text" => ("New clipboard item".to_string(), trim(&item.preview, 140)),
+        "image" => ("New clipboard image".to_string(), item.preview.clone()),
+        "bundle" => ("New files synced".to_string(), item.preview.clone()),
+        other => (format!("New clip ({other})"), item.preview.clone()),
     };
-    if let Err(e) = app
-        .notification()
-        .builder()
-        .title(title)
-        .body(body)
-        .show()
-    {
+    if let Err(e) = app.notification().builder().title(title).body(body).show() {
         warn!(error = %e, "showing incoming-clip notification failed");
     }
 }

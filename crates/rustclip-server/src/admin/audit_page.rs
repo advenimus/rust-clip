@@ -92,22 +92,12 @@ fn parse_filters(q: &ListQuery) -> ParsedFilters {
 }
 
 fn parse_date_start_ms(s: &str) -> Option<i64> {
-    parse_date(s).map(|d| {
-        d.with_time(Time::MIDNIGHT)
-            .assume_utc()
-            .unix_timestamp()
-            * 1000
-    })
+    parse_date(s).map(|d| d.with_time(Time::MIDNIGHT).assume_utc().unix_timestamp() * 1000)
 }
 
 fn parse_date_end_ms(s: &str) -> Option<i64> {
     parse_date(s).map(|d| {
-        d.with_time(Time::MIDNIGHT)
-            .assume_utc()
-            .unix_timestamp()
-            * 1000
-            + 24 * 60 * 60 * 1000
-            - 1
+        d.with_time(Time::MIDNIGHT).assume_utc().unix_timestamp() * 1000 + 24 * 60 * 60 * 1000 - 1
     })
 }
 
@@ -169,7 +159,10 @@ fn filter_query_string(filters: &ParsedFilters) -> String {
         parts.push(format!("event_type={}", urlencode(ev)));
     }
     if !filters.raw_start.trim().is_empty() {
-        parts.push(format!("start_date={}", urlencode(filters.raw_start.trim())));
+        parts.push(format!(
+            "start_date={}",
+            urlencode(filters.raw_start.trim())
+        ));
     }
     if !filters.raw_end.trim().is_empty() {
         parts.push(format!("end_date={}", urlencode(filters.raw_end.trim())));

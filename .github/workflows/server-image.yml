@@ -26,11 +26,30 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Detect Docker Hub secret
+        id: dhcheck
+        shell: bash
+        run: |
+          if [ -n "${{ secrets.DOCKERHUB_USERNAME }}" ] && [ -n "${{ secrets.DOCKERHUB_TOKEN }}" ]; then
+            echo "publish=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "publish=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Log in to Docker Hub
+        if: steps.dhcheck.outputs.publish == 'true'
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
       - name: Derive image metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
-          images: ghcr.io/${{ github.repository_owner }}/rustclip-server
+          images: |
+            ghcr.io/${{ github.repository_owner }}/rustclip-server
+            ${{ steps.dhcheck.outputs.publish == 'true' && format('docker.io/{0}/rustclip-server', secrets.DOCKERHUB_USERNAME) || '' }}
           tags: |
             type=sha,format=short
             type=ref,event=branch
@@ -44,6 +63,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
+          platforms: linux/amd64
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha

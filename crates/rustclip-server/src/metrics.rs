@@ -61,61 +61,96 @@ async fn render(state: &AppState) -> anyhow::Result<String> {
 
     // Counters from the hub.
     let m = &state.metrics;
-    writeln!(out, "# HELP rustclip_clip_events_accepted_total ClipEvent messages persisted by the WS hub.").unwrap();
+    writeln!(
+        out,
+        "# HELP rustclip_clip_events_accepted_total ClipEvent messages persisted by the WS hub."
+    )
+    .unwrap();
     writeln!(out, "# TYPE rustclip_clip_events_accepted_total counter").unwrap();
     writeln!(
         out,
         "rustclip_clip_events_accepted_total {}",
         m.clip_events_accepted.load(Ordering::Relaxed)
-    ).unwrap();
+    )
+    .unwrap();
 
     writeln!(out, "# HELP rustclip_clip_events_rate_limited_total ClipEvent messages dropped by the per-connection rate cap.").unwrap();
-    writeln!(out, "# TYPE rustclip_clip_events_rate_limited_total counter").unwrap();
+    writeln!(
+        out,
+        "# TYPE rustclip_clip_events_rate_limited_total counter"
+    )
+    .unwrap();
     writeln!(
         out,
         "rustclip_clip_events_rate_limited_total {}",
         m.clip_events_rejected_rate_limited.load(Ordering::Relaxed)
-    ).unwrap();
+    )
+    .unwrap();
 
-    writeln!(out, "# HELP rustclip_blob_uploads_total Blobs successfully uploaded.").unwrap();
+    writeln!(
+        out,
+        "# HELP rustclip_blob_uploads_total Blobs successfully uploaded."
+    )
+    .unwrap();
     writeln!(out, "# TYPE rustclip_blob_uploads_total counter").unwrap();
     writeln!(
         out,
         "rustclip_blob_uploads_total {}",
         m.blob_uploads.load(Ordering::Relaxed)
-    ).unwrap();
+    )
+    .unwrap();
 
-    writeln!(out, "# HELP rustclip_blob_downloads_total Blobs successfully downloaded.").unwrap();
+    writeln!(
+        out,
+        "# HELP rustclip_blob_downloads_total Blobs successfully downloaded."
+    )
+    .unwrap();
     writeln!(out, "# TYPE rustclip_blob_downloads_total counter").unwrap();
     writeln!(
         out,
         "rustclip_blob_downloads_total {}",
         m.blob_downloads.load(Ordering::Relaxed)
-    ).unwrap();
+    )
+    .unwrap();
 
-    writeln!(out, "# HELP rustclip_ws_connections_opened_total Successful WebSocket connections.").unwrap();
+    writeln!(
+        out,
+        "# HELP rustclip_ws_connections_opened_total Successful WebSocket connections."
+    )
+    .unwrap();
     writeln!(out, "# TYPE rustclip_ws_connections_opened_total counter").unwrap();
     writeln!(
         out,
         "rustclip_ws_connections_opened_total {}",
         m.ws_connections_opened.load(Ordering::Relaxed)
-    ).unwrap();
+    )
+    .unwrap();
 
-    writeln!(out, "# HELP rustclip_admin_login_success_total Admin portal logins that succeeded.").unwrap();
+    writeln!(
+        out,
+        "# HELP rustclip_admin_login_success_total Admin portal logins that succeeded."
+    )
+    .unwrap();
     writeln!(out, "# TYPE rustclip_admin_login_success_total counter").unwrap();
     writeln!(
         out,
         "rustclip_admin_login_success_total {}",
         m.admin_login_success.load(Ordering::Relaxed)
-    ).unwrap();
+    )
+    .unwrap();
 
-    writeln!(out, "# HELP rustclip_admin_login_failed_total Admin portal logins that failed.").unwrap();
+    writeln!(
+        out,
+        "# HELP rustclip_admin_login_failed_total Admin portal logins that failed."
+    )
+    .unwrap();
     writeln!(out, "# TYPE rustclip_admin_login_failed_total counter").unwrap();
     writeln!(
         out,
         "rustclip_admin_login_failed_total {}",
         m.admin_login_failed.load(Ordering::Relaxed)
-    ).unwrap();
+    )
+    .unwrap();
 
     // Gauges queried from the database.
     let user_count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM users")
@@ -129,14 +164,22 @@ async fn render(state: &AppState) -> anyhow::Result<String> {
         sqlx::query_scalar("SELECT COUNT(*) FROM devices WHERE revoked_at IS NULL")
             .fetch_one(&state.db)
             .await?;
-    writeln!(out, "# HELP rustclip_devices_active Active (non-revoked) device registrations.").unwrap();
+    writeln!(
+        out,
+        "# HELP rustclip_devices_active Active (non-revoked) device registrations."
+    )
+    .unwrap();
     writeln!(out, "# TYPE rustclip_devices_active gauge").unwrap();
     writeln!(out, "rustclip_devices_active {active_device_count}").unwrap();
 
     let queued_events: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM clip_events")
         .fetch_one(&state.db)
         .await?;
-    writeln!(out, "# HELP rustclip_clip_events_buffered Clip events still held in the offline buffer.").unwrap();
+    writeln!(
+        out,
+        "# HELP rustclip_clip_events_buffered Clip events still held in the offline buffer."
+    )
+    .unwrap();
     writeln!(out, "# TYPE rustclip_clip_events_buffered gauge").unwrap();
     writeln!(out, "rustclip_clip_events_buffered {queued_events}").unwrap();
 
@@ -145,7 +188,12 @@ async fn render(state: &AppState) -> anyhow::Result<String> {
         .await?;
     writeln!(out, "# HELP rustclip_blob_storage_bytes Total bytes of ciphertext currently held in the blob store.").unwrap();
     writeln!(out, "# TYPE rustclip_blob_storage_bytes gauge").unwrap();
-    writeln!(out, "rustclip_blob_storage_bytes {}", blob_bytes.unwrap_or(0)).unwrap();
+    writeln!(
+        out,
+        "rustclip_blob_storage_bytes {}",
+        blob_bytes.unwrap_or(0)
+    )
+    .unwrap();
 
     Ok(out)
 }

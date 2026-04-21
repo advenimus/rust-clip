@@ -154,8 +154,8 @@ pub struct SyncContext {
 }
 
 pub fn load_sync_context() -> Result<SyncContext> {
-    let creds = keychain::load()?
-        .ok_or_else(|| anyhow!("not enrolled; run enroll or login first"))?;
+    let creds =
+        keychain::load()?.ok_or_else(|| anyhow!("not enrolled; run enroll or login first"))?;
     let device_id = Uuid::parse_str(&creds.device_id).context("parsing device id")?;
     let content_key_bytes = BASE64
         .decode(creds.content_key_b64.as_bytes())
@@ -177,7 +177,13 @@ pub fn load_sync_context() -> Result<SyncContext> {
 }
 
 pub async fn run_sync(ctx: SyncContext) -> Result<()> {
-    sync::run(ctx.server_url, ctx.device_token, ctx.device_id, ctx.content_key).await
+    sync::run(
+        ctx.server_url,
+        ctx.device_token,
+        ctx.device_id,
+        ctx.content_key,
+    )
+    .await
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

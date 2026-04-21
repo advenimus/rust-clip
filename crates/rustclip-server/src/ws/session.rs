@@ -35,7 +35,9 @@ impl EventBucket {
 
     fn try_take(&mut self) -> bool {
         let now = Instant::now();
-        let elapsed = now.saturating_duration_since(self.last_refill).as_secs_f64();
+        let elapsed = now
+            .saturating_duration_since(self.last_refill)
+            .as_secs_f64();
         self.tokens =
             (self.tokens + elapsed * WS_EVENT_REFILL_PER_SEC).min(WS_EVENT_BUCKET_CAPACITY);
         self.last_refill = now;
@@ -54,9 +56,7 @@ use crate::{
 
 pub async fn run(socket: WebSocket, state: AppState, auth: DeviceAuth) {
     info!(user_id = %auth.user_id, device_id = %auth.device_id, "ws connected");
-    state
-        .metrics
-        .incr(&state.metrics.ws_connections_opened);
+    state.metrics.incr(&state.metrics.ws_connections_opened);
     let (mut writer, mut reader) = socket.split();
 
     // Subscribe first so no event is lost during the backlog drain window.

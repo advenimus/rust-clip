@@ -67,7 +67,9 @@ impl RateLimiter {
         let bucket = map
             .entry(key.to_string())
             .or_insert_with(|| Bucket::new(cfg.capacity));
-        let elapsed = now.saturating_duration_since(bucket.last_refill).as_secs_f64();
+        let elapsed = now
+            .saturating_duration_since(bucket.last_refill)
+            .as_secs_f64();
         bucket.tokens = (bucket.tokens + elapsed * cfg.refill_per_sec).min(cfg.capacity);
         bucket.last_refill = now;
         if bucket.tokens >= 1.0 {
@@ -82,7 +84,9 @@ impl RateLimiter {
         let mut map = self.inner.lock().await;
         let now = Instant::now();
         map.retain(|_, bucket| {
-            let elapsed = now.saturating_duration_since(bucket.last_refill).as_secs_f64();
+            let elapsed = now
+                .saturating_duration_since(bucket.last_refill)
+                .as_secs_f64();
             let projected = (bucket.tokens + elapsed * cfg.refill_per_sec).min(cfg.capacity);
             // Keep a bucket only while it still has a deficit. Fully recovered
             // buckets add no value because a new bucket starts at capacity.

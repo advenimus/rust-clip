@@ -54,10 +54,7 @@ async fn kick_off_sync(app: &AppHandle, state: &tauri::State<'_, AppState>) {
 }
 
 #[tauri::command]
-pub async fn cmd_logout(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn cmd_logout(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     {
         let inner = state.lock().await;
         let _ = inner.sync.stop(&app).await;
@@ -68,10 +65,7 @@ pub async fn cmd_logout(
 }
 
 #[tauri::command]
-pub async fn cmd_reset(
-    app: AppHandle,
-    state: tauri::State<'_, AppState>,
-) -> Result<(), String> {
+pub async fn cmd_reset(app: AppHandle, state: tauri::State<'_, AppState>) -> Result<(), String> {
     {
         let inner = state.lock().await;
         let _ = inner.sync.stop(&app).await;

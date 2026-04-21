@@ -609,17 +609,16 @@ mod tests {
         assert_eq!(revoked, 1);
         assert_eq!(invalidated, 1);
 
-        let (new_hash, new_salt, revoked_at): (String, Vec<u8>, Option<i64>) =
-            sqlx::query_as(
-                "SELECT u.password_hash, u.content_salt, \
+        let (new_hash, new_salt, revoked_at): (String, Vec<u8>, Option<i64>) = sqlx::query_as(
+            "SELECT u.password_hash, u.content_salt, \
                         (SELECT revoked_at FROM devices WHERE id = ?) \
                  FROM users u WHERE u.id = ?",
-            )
-            .bind(device_id)
-            .bind(user_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
+        )
+        .bind(device_id)
+        .bind(user_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
         assert_ne!(new_hash, original_hash);
         assert_ne!(new_salt, original_salt);
@@ -646,8 +645,11 @@ mod tests {
     async fn admin_reset_only_rotates_password_hash() {
         let pool = test_pool().await;
         let admin_id = seed_admin(&pool).await;
-        let (_, original_admin_hash, _) =
-            (admin_id, hash_password("admin-pw").unwrap(), Vec::<u8>::new());
+        let (_, original_admin_hash, _) = (
+            admin_id,
+            hash_password("admin-pw").unwrap(),
+            Vec::<u8>::new(),
+        );
 
         let (revoked, invalidated) = run_reset(&pool, admin_id, admin_id, "new-admin-pw").await;
         assert_eq!(revoked, 0);
