@@ -18,4 +18,5 @@ WORKDIR /app
 COPY --from=builder /app/target/release/rustclip-server /app/rustclip-server
 EXPOSE 8080
 USER nonroot
+# Static assets and Askama templates are embedded into the binary.
 ENTRYPOINT ["/app/rustclip-server"]

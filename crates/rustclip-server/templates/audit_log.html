@@ -1,0 +1,40 @@
+{% extends "layout.html" %}
+{% block title %}Audit log · RustClip{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <h1>Audit log</h1>
+  <p class="muted">Every significant administrative and authentication event.</p>
+</section>
+
+<section class="panel">
+  {% if rows.is_empty() %}
+    <p class="empty">Audit log is empty.</p>
+  {% else %}
+    <table class="table">
+      <thead>
+        <tr><th>When</th><th>Event</th><th>IP</th><th>Details</th></tr>
+      </thead>
+      <tbody>
+      {% for r in rows %}
+        <tr>
+          <td>{{ r.when }}</td>
+          <td class="mono">{{ r.event_type }}</td>
+          <td class="mono">
+            {% match r.ip_addr %}
+            {% when Some with (s) %}{{ s }}
+            {% when None %}-
+            {% endmatch %}
+          </td>
+          <td class="mono details">{{ r.details }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    <nav class="pager">
+      {% if has_next %}
+        <a class="btn btn-ghost" href="/admin/audit-log?before={{ next_cursor.unwrap_or(0) }}">Older</a>
+      {% endif %}
+    </nav>
+  {% endif %}
+</section>
+{% endblock %}

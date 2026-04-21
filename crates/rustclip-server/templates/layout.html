@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{% block title %}RustClip{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css" />
+</head>
+<body class="theme-dark">
+  <header class="topbar">
+    <a class="brand" href="/admin/">
+      <span class="brand-mark">//</span>
+      <span class="brand-name">RustClip</span>
+    </a>
+    <nav class="nav-links">
+      <a href="/admin/">Overview</a>
+      <a href="/admin/users">Users</a>
+      <a href="/admin/devices">Devices</a>
+      <a href="/admin/audit-log">Audit log</a>
+    </nav>
+    <form method="post" action="/admin/logout" class="logout-form">
+      <span class="who">{{ admin_display_name }}</span>
+      <button type="submit" class="btn btn-ghost">Log out</button>
+    </form>
+  </header>
+  <main class="content">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

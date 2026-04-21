@@ -1,0 +1,50 @@
+{% extends "layout.html" %}
+{% block title %}Devices · RustClip{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <h1>Devices</h1>
+  <p class="muted">Every device that has registered. Revoke anything unexpected.</p>
+</section>
+
+<section class="panel">
+  {% if devices.is_empty() %}
+    <p class="empty">No devices have registered yet.</p>
+  {% else %}
+    <table class="table">
+      <thead>
+        <tr><th>User</th><th>Device</th><th>Platform</th><th>Last seen</th><th>Created</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for d in devices %}
+        <tr>
+          <td class="mono">{{ d.username }}</td>
+          <td>{{ d.device_name }}</td>
+          <td class="mono">{{ d.platform }}</td>
+          <td>
+            {% match d.last_seen_at %}
+            {% when Some with (s) %}{{ s }}
+            {% when None %}<span class="muted">never</span>
+            {% endmatch %}
+          </td>
+          <td>{{ d.created_at }}</td>
+          <td>
+            {% if d.is_active %}
+              <span class="chip chip-ok">active</span>
+            {% else %}
+              <span class="chip chip-muted">revoked</span>
+            {% endif %}
+          </td>
+          <td class="row-actions">
+            {% if d.is_active %}
+              <form method="post" action="/admin/devices/{{ d.id }}/revoke" class="inline" onsubmit="return confirm('Revoke this device?');">
+                <button type="submit" class="btn btn-danger">Revoke</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endblock %}

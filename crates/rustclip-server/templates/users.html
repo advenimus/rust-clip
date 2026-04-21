@@ -1,0 +1,71 @@
+{% extends "layout.html" %}
+{% block title %}Users · RustClip{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <h1>Users</h1>
+  <p class="muted">Create and manage people who can sync clipboard content.</p>
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <h2>Add a user</h2>
+  </header>
+  <form method="post" action="/admin/users" class="form-inline">
+    <label>
+      <span>Username</span>
+      <input type="text" name="username" required pattern="[a-zA-Z0-9._-]{1,64}" />
+    </label>
+    <label>
+      <span>Display name</span>
+      <input type="text" name="display_name" required maxlength="120" />
+    </label>
+    <button type="submit" class="btn btn-primary">Create</button>
+  </form>
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <h2>All users</h2>
+  </header>
+  {% if users.is_empty() %}
+    <p class="empty">No users yet.</p>
+  {% else %}
+    <table class="table">
+      <thead>
+        <tr><th>Username</th><th>Display name</th><th>Devices</th><th>Created</th><th>Status</th><th></th></tr>
+      </thead>
+      <tbody>
+      {% for u in users %}
+        <tr>
+          <td class="mono">{{ u.username }}</td>
+          <td>
+            {{ u.display_name }}
+            {% if u.is_admin %}<span class="chip">admin</span>{% endif %}
+          </td>
+          <td>{{ u.device_count }}</td>
+          <td>{{ u.created_at }}</td>
+          <td>
+            {% if u.is_active %}
+              <span class="chip chip-ok">active</span>
+            {% else %}
+              <span class="chip chip-muted">disabled</span>
+            {% endif %}
+          </td>
+          <td class="row-actions">
+            {% if u.is_admin %}
+            {% else %}
+              <form method="post" action="/admin/users/{{ u.id }}/reset-enrollment" class="inline">
+                <button type="submit" class="btn btn-ghost">New enrollment token</button>
+              </form>
+              <form method="post" action="/admin/users/{{ u.id }}/delete" class="inline" onsubmit="return confirm('Delete user {{ u.username }}? This revokes all their devices.');">
+                <button type="submit" class="btn btn-danger">Delete</button>
+              </form>
+            {% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endblock %}

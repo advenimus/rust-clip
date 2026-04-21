@@ -2,7 +2,7 @@
 
 Self-hosted universal clipboard sync. Text, images, and files, end-to-end encrypted, across Windows, macOS, and Linux.
 
-**Status:** Phase 0, scaffold only. No functional sync yet.
+**Status:** Phase 1 in progress. Server + admin portal work (login, users, devices, audit log). Device enrollment, client, and clipboard sync come in Phases 2-5.
 
 ## Architecture at a glance
 
@@ -25,8 +25,13 @@ Desktop clients (Tauri) connect to the same container behind a reverse proxy (Ca
 Native:
 
 ```sh
+RUSTCLIP_DATA_DIR=./data \
+RUSTCLIP_ADMIN_USERNAME=admin \
+RUSTCLIP_ADMIN_PASSWORD=please-change-me \
 cargo run -p rustclip-server
-curl http://localhost:8080/healthz   # → ok
+
+curl http://localhost:8080/healthz     # → ok
+open http://localhost:8080/admin/login # then sign in as admin
 ```
 
 Docker:

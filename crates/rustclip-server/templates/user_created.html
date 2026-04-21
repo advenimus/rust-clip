@@ -1,0 +1,28 @@
+{% extends "layout.html" %}
+{% block title %}Enrollment token · RustClip{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <h1>Enrollment token issued</h1>
+  <p class="muted">
+    Share this token with <strong>{{ display_name }}</strong> out of band.
+    This is the only time the full token will be shown.
+  </p>
+</section>
+
+<section class="panel panel-emphasis">
+  <dl class="kv">
+    <dt>Username</dt><dd class="mono">{{ username }}</dd>
+    <dt>Server URL</dt><dd class="mono">{{ public_url }}</dd>
+    <dt>Expires</dt><dd>{{ expires_at }}</dd>
+  </dl>
+  <div class="token-box">
+    <code class="token">{{ enrollment_token }}</code>
+  </div>
+  <p class="muted" style="padding: 0 20px 16px">
+    The user enters the server URL, username, and this token in the RustClip desktop client to complete registration.
+  </p>
+  <div style="padding: 0 20px 20px">
+    <a href="/admin/users" class="btn btn-primary">Back to users</a>
+  </div>
+</section>
+{% endblock %}

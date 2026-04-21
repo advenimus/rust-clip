@@ -1,0 +1,41 @@
+{% extends "layout.html" %}
+{% block title %}Overview · RustClip{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <h1>Overview</h1>
+  <p class="muted">Welcome back, {{ admin_display_name }}.</p>
+</section>
+
+<section class="stats">
+  <a class="stat" href="/admin/users">
+    <span class="stat-value">{{ user_count }}</span>
+    <span class="stat-label">Users</span>
+  </a>
+  <a class="stat" href="/admin/devices">
+    <span class="stat-value">{{ active_device_count }}</span>
+    <span class="stat-label">Active devices</span>
+  </a>
+</section>
+
+<section class="panel">
+  <header class="panel-head">
+    <h2>Recent activity</h2>
+    <a href="/admin/audit-log" class="link-muted">View audit log</a>
+  </header>
+  {% if recent_events.is_empty() %}
+    <p class="empty">Nothing has happened yet.</p>
+  {% else %}
+    <table class="table">
+      <thead><tr><th>Event</th><th>When</th></tr></thead>
+      <tbody>
+      {% for ev in recent_events %}
+        <tr>
+          <td class="mono">{{ ev.event_type }}</td>
+          <td>{{ ev.when }}</td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endif %}
+</section>
+{% endblock %}
