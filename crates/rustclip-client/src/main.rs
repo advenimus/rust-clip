@@ -30,6 +30,13 @@ enum Command {
         /// Friendly name for this device (defaults to hostname)
         #[arg(long)]
         device_name: Option<String>,
+        /// Enrollment token (non-interactive; prompts if omitted)
+        #[arg(long)]
+        enrollment_token: Option<String>,
+        /// Password (non-interactive; prompts if omitted). Use env var
+        /// `RUSTCLIP_PASSWORD` in scripts to avoid shell history leakage.
+        #[arg(long, env = "RUSTCLIP_PASSWORD", hide_env_values = true)]
+        password: Option<String>,
     },
     /// Log in an additional device for an already-enrolled user.
     Login {
@@ -39,6 +46,9 @@ enum Command {
         username: String,
         #[arg(long)]
         device_name: Option<String>,
+        /// Password (non-interactive; prompts if omitted)
+        #[arg(long, env = "RUSTCLIP_PASSWORD", hide_env_values = true)]
+        password: Option<String>,
     },
     /// Show the current connection and device info.
     Status,
@@ -72,12 +82,15 @@ async fn main() -> Result<()> {
         Command::Enroll {
             server_url,
             device_name,
-        } => commands::enroll(server_url, device_name).await,
+            enrollment_token,
+            password,
+        } => commands::enroll(server_url, device_name, enrollment_token, password).await,
         Command::Login {
             server_url,
             username,
             device_name,
-        } => commands::login(server_url, username, device_name).await,
+            password,
+        } => commands::login(server_url, username, device_name, password).await,
         Command::Status => commands::status().await,
         Command::Logout => commands::logout().await,
         Command::Reset => {

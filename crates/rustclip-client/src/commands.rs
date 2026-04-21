@@ -40,14 +40,28 @@ fn random_content_salt() -> String {
     BASE64.encode(buf)
 }
 
-pub async fn enroll(server_url: String, device_name: Option<String>) -> Result<()> {
+pub async fn enroll(
+    server_url: String,
+    device_name: Option<String>,
+    enrollment_token_opt: Option<String>,
+    password_opt: Option<String>,
+) -> Result<()> {
     let device_name = device_name.unwrap_or_else(default_device_name);
-    let enrollment_token = read_secret("Enrollment token: ")?;
-    let password = read_password("Choose a password: ")?;
-    let confirm = read_password("Confirm password: ")?;
-    if password != confirm {
-        return Err(anyhow!("passwords did not match"));
-    }
+    let enrollment_token = match enrollment_token_opt {
+        Some(t) => t,
+        None => read_secret("Enrollment token: ")?,
+    };
+    let password = match password_opt {
+        Some(p) => p,
+        None => {
+            let p = read_password("Choose a password: ")?;
+            let confirm = read_password("Confirm password: ")?;
+            if p != confirm {
+                return Err(anyhow!("passwords did not match"));
+            }
+            p
+        }
+    };
     if password.len() < 8 {
         return Err(anyhow!("password must be at least 8 characters"));
     }
@@ -88,9 +102,13 @@ pub async fn login(
     server_url: String,
     username: String,
     device_name: Option<String>,
+    password_opt: Option<String>,
 ) -> Result<()> {
     let device_name = device_name.unwrap_or_else(default_device_name);
-    let password = read_password("Password: ")?;
+    let password = match password_opt {
+        Some(p) => p,
+        None => read_password("Password: ")?,
+    };
 
     let client = ServerClient::new(&server_url)?;
     let resp = client

@@ -7,3 +7,4 @@
 .env.local
 .idea/
 .vscode/
+.claude/
