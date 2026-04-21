@@ -47,7 +47,8 @@ async fn upload(
         .and_then(|v| v.to_str().ok())
         .and_then(|s| s.parse::<u64>().ok());
 
-    let max = state.config.max_payload_bytes;
+    let runtime = state.settings.snapshot().await;
+    let max = runtime.max_payload_bytes;
     if let Some(n) = declared_len {
         if n > max {
             return Err(ApiError::new(
@@ -114,7 +115,7 @@ async fn upload(
     }
 
     let sha_hex = hex::encode(hasher.finalize());
-    let ttl_hours = state.config.offline_ttl_hours as i64;
+    let ttl_hours = runtime.offline_ttl_hours as i64;
     let expires_at =
         (OffsetDateTime::now_utc() + TimeDuration::hours(ttl_hours)).unix_timestamp() * 1000;
     let created_at = now_millis();

@@ -6,6 +6,11 @@
   <p class="muted">Every device that has registered. Revoke anything unexpected.</p>
 </section>
 
+{% match flash %}
+{% when Some with (msg) %}
+  <div class="info-banner">{{ msg }}</div>
+{% when None %}{% endmatch %}
+
 <section class="panel">
   {% if devices.is_empty() %}
     <p class="empty">No devices have registered yet.</p>
@@ -36,7 +41,7 @@
           </td>
           <td class="row-actions">
             {% if d.is_active %}
-              <form method="post" action="/admin/devices/{{ d.id }}/revoke" class="inline" onsubmit="return confirm('Revoke this device?');">
+              <form method="post" action="/admin/devices/{{ d.id }}/revoke" class="inline" onsubmit="return confirm('Revoke {{ d.device_name }}? This device will be signed out and must re-enroll to regain access.');">
                 <button type="submit" class="btn btn-danger">Revoke</button>
               </form>
             {% endif %}

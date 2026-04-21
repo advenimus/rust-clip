@@ -6,7 +6,10 @@ use axum::{
 use sqlx::FromRow;
 use time::OffsetDateTime;
 
-use crate::{error::AppResult, middleware::AdminUser, state::AppState};
+use crate::{db::now_millis, error::AppResult, middleware::AdminUser, state::AppState};
+
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
+const WEEK_MS: i64 = 7 * DAY_MS;
 
 #[derive(FromRow)]
 struct RecentEventRow {
@@ -20,6 +23,9 @@ struct DashboardTemplate<'a> {
     admin_display_name: &'a str,
     user_count: i64,
     active_device_count: i64,
+    clip_events_24h: i64,
+    clip_events_7d: i64,
+    blob_storage_mb: String,
     recent_events: Vec<RecentEvent>,
 }
 
@@ -37,6 +43,23 @@ pub async fn show(State(state): State<AppState>, admin: AdminUser) -> AppResult<
             .fetch_one(&state.db)
             .await?;
 
+    let now = now_millis();
+    let clip_events_24h: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM clip_events WHERE created_at >= ?")
+            .bind(now - DAY_MS)
+            .fetch_one(&state.db)
+            .await?;
+    let clip_events_7d: i64 =
+        sqlx::query_scalar("SELECT COUNT(*) FROM clip_events WHERE created_at >= ?")
+            .bind(now - WEEK_MS)
+            .fetch_one(&state.db)
+            .await?;
+
+    let blob_bytes: Option<i64> = sqlx::query_scalar("SELECT SUM(byte_length) FROM blobs")
+        .fetch_one(&state.db)
+        .await?;
+    let blob_storage_mb = format_mb(blob_bytes.unwrap_or(0));
+
     let recent = sqlx::query_as::<_, RecentEventRow>(
         "SELECT event_type, created_at FROM audit_log ORDER BY created_at DESC LIMIT 10",
     )
@@ -53,9 +76,28 @@ pub async fn show(State(state): State<AppState>, admin: AdminUser) -> AppResult<
         admin_display_name: &admin.display_name,
         user_count,
         active_device_count,
+        clip_events_24h,
+        clip_events_7d,
+        blob_storage_mb,
         recent_events: recent,
     };
     Ok(Html(tmpl.render()?).into_response())
+}
+
+fn format_mb(bytes: i64) -> String {
+    if bytes <= 0 {
+        return "0".into();
+    }
+    const KB: f64 = 1024.0;
+    const MB: f64 = 1024.0 * 1024.0;
+    let b = bytes as f64;
+    if b < KB {
+        format!("{bytes} B")
+    } else if b < MB {
+        format!("{:.1} KB", b / KB)
+    } else {
+        format!("{:.1} MB", b / MB)
+    }
 }
 
 pub fn format_millis(ms: i64) -> String {
@@ -68,5 +110,31 @@ pub fn format_millis(ms: i64) -> String {
             .format(&time::format_description::well_known::Rfc3339)
             .unwrap_or_else(|_| "-".into()),
         Err(_) => "-".into(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_mb_handles_zero() {
+        assert_eq!(format_mb(0), "0");
+        assert_eq!(format_mb(-5), "0");
+    }
+
+    #[test]
+    fn format_mb_bytes_for_small() {
+        assert_eq!(format_mb(500), "500 B");
+    }
+
+    #[test]
+    fn format_mb_kb_for_sub_mb() {
+        assert_eq!(format_mb(5120), "5.0 KB");
+    }
+
+    #[test]
+    fn format_mb_mb_for_large() {
+        assert_eq!(format_mb(10 * 1024 * 1024), "10.0 MB");
     }
 }

@@ -1,9 +1,10 @@
 use askama::Template;
 use axum::{
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::HeaderMap,
     response::{Html, IntoResponse, Redirect, Response},
 };
+use serde::Deserialize;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -44,9 +45,19 @@ pub struct DeviceRowView {
 struct DevicesTemplate<'a> {
     admin_display_name: &'a str,
     devices: Vec<DeviceRowView>,
+    flash: Option<String>,
 }
 
-pub async fn list(State(state): State<AppState>, admin: AdminUser) -> AppResult<Response> {
+#[derive(Deserialize, Default)]
+pub struct ListQuery {
+    pub revoked: Option<String>,
+}
+
+pub async fn list(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Query(q): Query<ListQuery>,
+) -> AppResult<Response> {
     let rows = sqlx::query_as::<_, DeviceListRow>(
         "SELECT d.id, d.user_id, u.username, d.device_name, d.platform, \
                 d.last_seen_at, d.created_at, d.revoked_at \
@@ -69,9 +80,15 @@ pub async fn list(State(state): State<AppState>, admin: AdminUser) -> AppResult<
         })
         .collect();
 
+    let flash = q
+        .revoked
+        .as_ref()
+        .map(|name| format!("Device '{name}' was revoked."));
+
     let tmpl = DevicesTemplate {
         admin_display_name: &admin.display_name,
         devices,
+        flash,
     };
     Ok(Html(tmpl.render()?).into_response())
 }
@@ -82,6 +99,15 @@ pub async fn revoke(
     headers: HeaderMap,
     Path(id): Path<Uuid>,
 ) -> AppResult<Redirect> {
+    let device_name: Option<String> =
+        sqlx::query_scalar("SELECT device_name FROM devices WHERE id = ?")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some(device_name) = device_name else {
+        return Err(AppError::NotFound);
+    };
+
     let now = now_millis();
     let res = sqlx::query("UPDATE devices SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL")
         .bind(now)
@@ -103,8 +129,25 @@ pub async fn revoke(
             ip_addr: ip.as_deref(),
             user_agent: ua.as_deref(),
         },
-        &serde_json::json!({ "device_id": id }),
+        &serde_json::json!({ "device_id": id, "device_name": device_name }),
     )
     .await?;
-    Ok(Redirect::to("/admin/devices"))
+
+    Ok(Redirect::to(&format!(
+        "/admin/devices?revoked={}",
+        urlencode(&device_name)
+    )))
+}
+
+fn urlencode(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for b in s.as_bytes() {
+        match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*b as char)
+            }
+            _ => out.push_str(&format!("%{b:02X}")),
+        }
+    }
+    out
 }

@@ -212,3 +212,32 @@ input:focus { border-color: var(--accent); }
   color: var(--danger);
   font-size: 13px;
 }
+.info-banner {
+  margin: 0 0 16px;
+  padding: 10px 14px;
+  background: rgba(127, 207, 143, 0.08);
+  border: 1px solid rgba(127, 207, 143, 0.4);
+  color: var(--success);
+  font-size: 13px;
+}
+.settings-form { display: flex; flex-direction: column; gap: 20px; padding: 20px; }
+.settings-form label { gap: 8px; }
+.settings-form input { max-width: 360px; }
+.muted-note { text-transform: none; letter-spacing: normal; font-size: 12px; color: var(--text-muted); font-weight: 400; }
+.form-actions { display: flex; gap: 10px; padding-top: 8px; }
+.filter-form { display: flex; flex-wrap: wrap; gap: 12px; padding: 16px 20px; border-bottom: 1px solid var(--border-soft); align-items: end; }
+.filter-form label { min-width: 160px; }
+.filter-form input, .filter-form select { max-width: 220px; }
+.filter-form .spacer { flex: 1; }
+select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 9px 12px;
+  font-family: var(--font-sans);
+  font-size: 14px;
+  outline: none;
+}
+select:focus { border-color: var(--accent); }
+.confirm-inline { display: inline; margin-left: 8px; }
+.confirm-inline button { padding: 4px 10px; font-size: 12px; }

@@ -152,7 +152,7 @@ async fn persist_and_broadcast(
         }
     };
 
-    let ttl_hours = state.config.offline_ttl_hours as i64;
+    let ttl_hours = state.settings.snapshot().await.offline_ttl_hours as i64;
     let expires_at =
         (OffsetDateTime::now_utc() + Duration::hours(ttl_hours)).unix_timestamp() * 1000;
 

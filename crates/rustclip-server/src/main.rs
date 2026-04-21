@@ -8,6 +8,7 @@ mod error;
 mod middleware;
 mod models;
 mod password;
+mod settings;
 mod state;
 mod sweeper;
 #[cfg(test)]
@@ -32,7 +33,7 @@ use tower_sessions_sqlx_store::SqliteStore;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::{config::Config, state::AppState, ws::hub::Hub};
+use crate::{config::Config, settings::SettingsStore, state::AppState, ws::hub::Hub};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -63,11 +64,16 @@ async fn main() -> Result<()> {
         .with_same_site(SameSite::Strict)
         .with_expiry(Expiry::OnInactivity(time::Duration::days(7)));
 
-    sweeper::spawn(pool.clone());
+    let settings = SettingsStore::load(&pool, &config)
+        .await
+        .context("loading runtime settings")?;
+
+    sweeper::spawn(pool.clone(), settings.clone());
 
     let state = AppState {
         db: pool,
         config: Arc::new(config.clone()),
+        settings,
         hub: Arc::new(Hub::new()),
     };
 

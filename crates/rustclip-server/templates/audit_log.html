@@ -7,8 +7,36 @@
 </section>
 
 <section class="panel">
+  <form method="get" action="/admin/audit-log" class="filter-form">
+    <label>
+      Event type
+      <select name="event_type">
+        <option value="">All</option>
+        {% for ev in event_types %}
+          {% if ev.as_str() == filter.event_type.as_str() %}
+            <option value="{{ ev }}" selected>{{ ev }}</option>
+          {% else %}
+            <option value="{{ ev }}">{{ ev }}</option>
+          {% endif %}
+        {% endfor %}
+      </select>
+    </label>
+    <label>
+      Start date
+      <input type="text" name="start_date" value="{{ filter.start_date }}" placeholder="YYYY-MM-DD" />
+    </label>
+    <label>
+      End date
+      <input type="text" name="end_date" value="{{ filter.end_date }}" placeholder="YYYY-MM-DD" />
+    </label>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Filter</button>
+      <a href="/admin/audit-log" class="btn btn-ghost">Reset</a>
+      <a href="/admin/audit-log.csv{% if csv_query_string.is_empty() %}{% else %}?{{ csv_query_string|safe }}{% endif %}" class="btn btn-ghost">Export CSV</a>
+    </div>
+  </form>
   {% if rows.is_empty() %}
-    <p class="empty">Audit log is empty.</p>
+    <p class="empty">No audit rows match the filters.</p>
   {% else %}
     <table class="table">
       <thead>
@@ -32,7 +60,7 @@
     </table>
     <nav class="pager">
       {% if has_next %}
-        <a class="btn btn-ghost" href="/admin/audit-log?before={{ next_cursor.unwrap_or(0) }}">Older</a>
+        <a class="btn btn-ghost" href="/admin/audit-log?before={{ next_cursor.unwrap_or(0) }}{% if query_string.is_empty() %}{% else %}&{{ query_string|safe }}{% endif %}">Older</a>
       {% endif %}
     </nav>
   {% endif %}

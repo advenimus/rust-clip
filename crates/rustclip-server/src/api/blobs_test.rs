@@ -11,7 +11,14 @@ use tempfile::TempDir;
 use tokio::net::TcpListener;
 use uuid::Uuid;
 
-use crate::{config::Config, state::AppState, test_util::test_pool, tokens, ws::hub::Hub};
+use crate::{
+    config::Config,
+    settings::{RuntimeSettings, SettingsStore},
+    state::AppState,
+    test_util::test_pool,
+    tokens,
+    ws::hub::Hub,
+};
 
 async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
     let tmp = TempDir::new().unwrap();
@@ -26,9 +33,15 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
     });
     tokio::fs::create_dir_all(config.blobs_dir()).await.unwrap();
 
+    let settings = SettingsStore::from_values(RuntimeSettings {
+        max_payload_bytes: 1024 * 1024,
+        offline_ttl_hours: 24,
+        audit_retention_days: 90,
+    });
     let state = AppState {
         db: pool,
         config,
+        settings,
         hub: Arc::new(Hub::new()),
     };
     let app = Router::new()
