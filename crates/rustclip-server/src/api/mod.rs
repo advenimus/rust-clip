@@ -1,12 +1,13 @@
 use axum::{
     Json, Router,
     http::StatusCode,
+    middleware::from_fn_with_state,
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use rustclip_shared::rest::{ErrorBody, ErrorResponse};
 
-use crate::state::AppState;
+use crate::{rate_limit, state::AppState};
 
 pub mod auth;
 pub mod blobs;
@@ -15,11 +16,18 @@ mod blobs_test;
 pub mod device_auth;
 pub mod me;
 
-pub fn router() -> Router<AppState> {
-    Router::new()
+pub fn router(auth_limiter: rate_limit::RateLimiter) -> Router<AppState> {
+    let auth_routes = Router::new()
         .route("/auth/enroll", post(auth::enroll))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .layer(from_fn_with_state(
+            auth_limiter,
+            rate_limit::auth_api_layer,
+        ));
+
+    Router::new()
+        .merge(auth_routes)
         .route("/me", get(me::show))
         .nest("/blobs", blobs::router())
 }

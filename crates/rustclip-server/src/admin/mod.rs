@@ -1,9 +1,10 @@
 use axum::{
     Router,
+    middleware::from_fn_with_state,
     routing::{get, post},
 };
 
-use crate::state::AppState;
+use crate::{rate_limit, state::AppState};
 
 pub mod audit_page;
 pub mod dashboard;
@@ -12,9 +13,16 @@ pub mod login;
 pub mod settings;
 pub mod users;
 
-pub fn router() -> Router<AppState> {
-    Router::new()
+pub fn router(auth_limiter: rate_limit::RateLimiter) -> Router<AppState> {
+    let login_routes = Router::new()
         .route("/login", get(login::show).post(login::submit))
+        .layer(from_fn_with_state(
+            auth_limiter,
+            rate_limit::admin_login_layer,
+        ));
+
+    Router::new()
+        .merge(login_routes)
         .route("/logout", post(login::logout))
         .route("/", get(dashboard::show))
         .route("/users", get(users::list).post(users::create))

@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     config::Config,
+    rate_limit::RateLimiter,
     settings::{RuntimeSettings, SettingsStore},
     state::AppState,
     test_util::test_pool,
@@ -43,9 +44,10 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
         config,
         settings,
         hub: Arc::new(Hub::new()),
+        auth_limiter: RateLimiter::new(),
     };
     let app = Router::new()
-        .nest("/api/v1", crate::api::router())
+        .nest("/api/v1", crate::api::router(RateLimiter::new()))
         .with_state(state);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -149,6 +151,33 @@ async fn upload_rejects_unauthenticated() {
         .await
         .unwrap();
     assert_eq!(resp.status(), 401);
+}
+
+#[tokio::test]
+async fn blob_uploads_not_throttled_by_auth_limiter() {
+    // Regression: the per-IP auth limiter must NOT cover /blobs, otherwise
+    // heavy users hit 429 on their 11th image of the minute.
+    let pool = test_pool().await;
+    let token = seed_device(&pool).await;
+    let (addr, _tmp) = spawn_app(pool).await;
+
+    let client = reqwest::Client::new();
+    for i in 0..15 {
+        let resp = client
+            .post(format!("http://{addr}/api/v1/blobs"))
+            .bearer_auth(&token)
+            .header("content-type", "application/octet-stream")
+            .body(vec![i as u8; 32])
+            .send()
+            .await
+            .unwrap();
+        assert!(
+            resp.status().is_success(),
+            "upload {} was throttled: {}",
+            i,
+            resp.status()
+        );
+    }
 }
 
 #[tokio::test]

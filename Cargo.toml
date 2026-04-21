@@ -20,7 +20,7 @@ thiserror = "2"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "time", "fs", "io-util"] }
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt", "json"] }
 axum = { version = "0.8", features = ["macros", "ws"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -39,7 +39,7 @@ rand = "0.8"
 askama = "0.12"
 tower-sessions = "0.14"
 tower-sessions-sqlx-store = { version = "0.15", features = ["sqlite"] }
-tower-http = { version = "0.6", features = ["trace", "normalize-path"] }
+tower-http = { version = "0.6", features = ["trace", "normalize-path", "set-header"] }
 tower = "0.5"
 uuid = { version = "1", features = ["v4", "serde"] }
 time = { version = "0.3", features = ["serde", "formatting", "parsing", "macros"] }

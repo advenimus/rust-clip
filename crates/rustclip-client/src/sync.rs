@@ -10,6 +10,7 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
+use rand::Rng;
 use rustclip_shared::{
     MAX_INLINE_CIPHERTEXT_BYTES, PROTOCOL_VERSION,
     protocol::{
@@ -80,9 +81,24 @@ pub async fn run(
                 warn!(error = %e, "ws session error, backing off {:?}", backoff);
             }
         }
-        tokio::time::sleep(backoff).await;
+        let jittered = jitter(backoff);
+        debug!(?jittered, "reconnect backoff with jitter");
+        tokio::time::sleep(jittered).await;
         backoff = (backoff * 2).min(RECONNECT_MAX);
     }
+}
+
+/// Applies ±25% full jitter to a base backoff. Prevents synchronized
+/// reconnect stampedes when many clients share a dropped upstream link.
+fn jitter(base: Duration) -> Duration {
+    let base_ms = base.as_millis() as u64;
+    if base_ms == 0 {
+        return base;
+    }
+    let spread = base_ms / 4;
+    let offset = rand::thread_rng().gen_range(0..=spread * 2);
+    let jittered = base_ms.saturating_sub(spread).saturating_add(offset);
+    Duration::from_millis(jittered)
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -8,6 +8,7 @@ mod error;
 mod middleware;
 mod models;
 mod password;
+mod rate_limit;
 mod settings;
 mod state;
 mod sweeper;
@@ -16,7 +17,7 @@ mod test_util;
 mod tokens;
 mod ws;
 
-use std::sync::Arc;
+use std::{env, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -27,13 +28,17 @@ use axum::{
 };
 use tokio::net::TcpListener;
 use tower::Layer;
-use tower_http::{normalize_path::NormalizePathLayer, trace::TraceLayer};
+use tower_http::{
+    normalize_path::NormalizePathLayer, set_header::SetResponseHeaderLayer, trace::TraceLayer,
+};
 use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 use tower_sessions_sqlx_store::SqliteStore;
-use tracing::info;
+use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::{config::Config, settings::SettingsStore, state::AppState, ws::hub::Hub};
+use crate::{
+    config::Config, rate_limit::RateLimiter, settings::SettingsStore, state::AppState, ws::hub::Hub,
+};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -70,18 +75,48 @@ async fn main() -> Result<()> {
 
     sweeper::spawn(pool.clone(), settings.clone());
 
+    let auth_limiter = RateLimiter::new();
+    auth_limiter
+        .clone()
+        .spawn_pruner(rate_limit::AUTH_API_LIMIT, std::time::Duration::from_secs(300));
+
     let state = AppState {
         db: pool,
         config: Arc::new(config.clone()),
         settings,
         hub: Arc::new(Hub::new()),
+        auth_limiter,
     };
 
+    let admin_router = admin::router(state.auth_limiter.clone())
+        .layer(SetResponseHeaderLayer::overriding(
+            header::CONTENT_SECURITY_POLICY,
+            axum::http::HeaderValue::from_static(
+                "default-src 'self'; style-src 'self' 'unsafe-inline'; \
+                 script-src 'self'; img-src 'self' data:; \
+                 frame-ancestors 'none'; form-action 'self'; base-uri 'self'",
+            ),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::REFERRER_POLICY,
+            axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            axum::http::HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_FRAME_OPTIONS,
+            axum::http::HeaderValue::from_static("DENY"),
+        ));
+    let api_router = api::router(state.auth_limiter.clone());
+
+    let pool_for_shutdown = state.db.clone();
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/static/app.css", get(serve_app_css))
-        .nest("/admin", admin::router())
-        .nest("/api/v1", api::router())
+        .nest("/admin", admin_router)
+        .nest("/api/v1", api_router)
         .nest("/ws", ws::router())
         .with_state(state)
         .layer(session_layer)
@@ -96,9 +131,43 @@ async fn main() -> Result<()> {
 
     info!(addr = %config.bind_addr, "rustclip-server listening");
     axum::serve(listener, tower::make::Shared::new(service))
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .context("server error")?;
+
+    info!("shutdown: checkpointing WAL and closing pool");
+    if let Err(e) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")
+        .execute(&pool_for_shutdown)
+        .await
+    {
+        warn!(error = ?e, "wal checkpoint failed");
+    }
+    pool_for_shutdown.close().await;
+    info!("shutdown complete");
     Ok(())
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        let _ = tokio::signal::ctrl_c().await;
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        use tokio::signal::unix::{SignalKind, signal};
+        match signal(SignalKind::terminate()) {
+            Ok(mut s) => {
+                let _ = s.recv().await;
+            }
+            Err(_) => std::future::pending::<()>().await,
+        }
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => info!("shutdown: received ctrl-c"),
+        _ = terminate => info!("shutdown: received SIGTERM"),
+    }
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -115,5 +184,12 @@ fn init_tracing() {
     let filter = EnvFilter::try_from_env("RUSTCLIP_LOG_LEVEL")
         .or_else(|_| EnvFilter::try_new("info"))
         .expect("static filter");
-    fmt().with_env_filter(filter).init();
+    let format = env::var("RUSTCLIP_LOG_FORMAT")
+        .unwrap_or_else(|_| "pretty".into())
+        .to_ascii_lowercase();
+    let builder = fmt().with_env_filter(filter);
+    match format.as_str() {
+        "json" => builder.json().with_target(false).init(),
+        _ => builder.init(),
+    }
 }

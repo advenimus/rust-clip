@@ -1,5 +1,7 @@
 //! Per-connection WS session task. Owns one socket and one broadcast receiver.
 
+use std::time::Instant;
+
 use axum::extract::ws::{Message, WebSocket};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
@@ -12,6 +14,39 @@ use time::{Duration, OffsetDateTime};
 use tokio::sync::broadcast;
 use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+/// Token-bucket rate cap for inbound ClipEvent messages per WS connection.
+/// 30 events / 10s ≈ 3 events/s steady-state with burst headroom.
+const WS_EVENT_BUCKET_CAPACITY: f64 = 30.0;
+const WS_EVENT_REFILL_PER_SEC: f64 = 3.0;
+
+struct EventBucket {
+    tokens: f64,
+    last_refill: Instant,
+}
+
+impl EventBucket {
+    fn new() -> Self {
+        Self {
+            tokens: WS_EVENT_BUCKET_CAPACITY,
+            last_refill: Instant::now(),
+        }
+    }
+
+    fn try_take(&mut self) -> bool {
+        let now = Instant::now();
+        let elapsed = now.saturating_duration_since(self.last_refill).as_secs_f64();
+        self.tokens =
+            (self.tokens + elapsed * WS_EVENT_REFILL_PER_SEC).min(WS_EVENT_BUCKET_CAPACITY);
+        self.last_refill = now;
+        if self.tokens >= 1.0 {
+            self.tokens -= 1.0;
+            true
+        } else {
+            false
+        }
+    }
+}
 
 use crate::{
     api::device_auth::DeviceAuth, db::now_millis, state::AppState, ws::hub::ClipBroadcast,
@@ -41,11 +76,13 @@ pub async fn run(socket: WebSocket, state: AppState, auth: DeviceAuth) {
         return;
     }
 
+    let mut event_bucket = EventBucket::new();
+
     loop {
         tokio::select! {
             frame = reader.next() => match frame {
                 Some(Ok(Message::Text(text))) => {
-                    if let Err(e) = handle_client_text(&state, &auth, &text, &mut writer, &mut live_rx).await {
+                    if let Err(e) = handle_client_text(&state, &auth, &text, &mut writer, &mut live_rx, &mut event_bucket).await {
                         warn!(error = %e, "handling client text failed");
                         let _ = send_server(&mut writer, &ServerMessage::Error {
                             code: "bad_message".into(),
@@ -97,6 +134,7 @@ async fn handle_client_text(
     text: &str,
     writer: &mut futures_util::stream::SplitSink<WebSocket, Message>,
     _live_rx: &mut broadcast::Receiver<std::sync::Arc<ClipBroadcast>>,
+    bucket: &mut EventBucket,
 ) -> anyhow::Result<()> {
     let msg: ClientMessage =
         serde_json::from_str(text).map_err(|e| anyhow::anyhow!("invalid json: {e}"))?;
@@ -105,6 +143,19 @@ async fn handle_client_text(
             send_server(writer, &ServerMessage::Pong).await.ok();
         }
         ClientMessage::ClipEvent(event) => {
+            if !bucket.try_take() {
+                warn!(device_id = %auth.device_id, "ws clip event rate cap exceeded");
+                send_server(
+                    writer,
+                    &ServerMessage::Error {
+                        code: "rate_limited".into(),
+                        message: "clip event rate limit exceeded; event dropped".into(),
+                    },
+                )
+                .await
+                .ok();
+                return Ok(());
+            }
             persist_and_broadcast(state, auth, event.clone()).await?;
             send_server(writer, &ServerMessage::Ack { id: event.id })
                 .await
