@@ -52,20 +52,32 @@
             {% endif %}
           </td>
           <td class="row-actions">
-            <form method="post" action="/admin/users/{{ u.id }}/reset-password" class="inline reset-pw"
-                  onsubmit="return confirm('Reset password for {{ u.username }}?\n\nThis will:\n  • Sign out every device the user has.\n  • Discard any clipboard events still buffered on the server (encrypted with the old key).\n\nLeave the field blank to let the server generate a password; the new password is shown once on the next screen.');">
-              <input type="password" name="new_password" placeholder="leave blank to auto-generate" autocomplete="new-password" />
-              <button type="submit" class="btn btn-ghost">Reset password</button>
-            </form>
-            {% if u.is_admin %}
-            {% else %}
-              <form method="post" action="/admin/users/{{ u.id }}/reset-enrollment" class="inline">
-                <button type="submit" class="btn btn-ghost">New enrollment token</button>
-              </form>
-              <form method="post" action="/admin/users/{{ u.id }}/delete" class="inline" onsubmit="return confirm('Delete user {{ u.username }}? This revokes all their devices.');">
-                <button type="submit" class="btn btn-danger">Delete</button>
-              </form>
-            {% endif %}
+            <details class="action-menu">
+              <summary class="btn btn-ghost action-trigger">
+                Actions
+                <svg class="chev" viewBox="0 0 10 6" width="10" height="6" aria-hidden="true"><path d="M0 0 L5 6 L10 0 Z" fill="currentColor"/></svg>
+              </summary>
+              <div class="menu-card" role="menu">
+                <button type="button"
+                        class="menu-item"
+                        data-action="reset-password"
+                        data-user-id="{{ u.id }}"
+                        data-username="{{ u.username }}">
+                  Reset password…
+                </button>
+                {% if u.is_admin %}
+                {% else %}
+                  <form method="post" action="/admin/users/{{ u.id }}/reset-enrollment" class="menu-form">
+                    <button type="submit" class="menu-item">New enrollment token</button>
+                  </form>
+                  <div class="menu-separator"></div>
+                  <form method="post" action="/admin/users/{{ u.id }}/delete" class="menu-form"
+                        onsubmit="return confirm('Delete user {{ u.username }}? This revokes all their devices.');">
+                    <button type="submit" class="menu-item menu-item-danger">Delete user</button>
+                  </form>
+                {% endif %}
+              </div>
+            </details>
           </td>
         </tr>
       {% endfor %}
@@ -73,4 +85,22 @@
     </table>
   {% endif %}
 </section>
+
+<dialog id="reset-password-dialog" class="modal">
+  <form method="post" class="modal-body" id="reset-password-form">
+    <h3>Reset password for <span class="mono" data-field="username"></span></h3>
+    <label>
+      New password
+      <input type="password" name="new_password" autocomplete="new-password" minlength="8" placeholder="leave blank to auto-generate" />
+      <span class="muted-note">At least 8 characters. Leave empty and the server generates a strong password that is shown once on the next screen.</span>
+    </label>
+    <p class="modal-warn">
+      This will sign out every device the user has. Any clip events still buffered on the server are encrypted under the old content key and will be discarded.
+    </p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-ghost" data-close>Cancel</button>
+      <button type="submit" class="btn btn-primary">Reset password</button>
+    </div>
+  </form>
+</dialog>
 {% endblock %}

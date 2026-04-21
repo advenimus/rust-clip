@@ -115,6 +115,7 @@ async fn main() -> Result<()> {
     let app = Router::new()
         .route("/healthz", get(healthz))
         .route("/static/app.css", get(serve_app_css))
+        .route("/static/admin.js", get(serve_admin_js))
         .nest("/admin", admin_router)
         .nest("/api/v1", api_router)
         .nest("/ws", ws::router())
@@ -175,9 +176,17 @@ async fn healthz() -> impl IntoResponse {
 }
 
 const APP_CSS: &str = include_str!("../static/app.css");
+const ADMIN_JS: &str = include_str!("../static/admin.js");
 
 async fn serve_app_css() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS)
+}
+
+async fn serve_admin_js() -> impl IntoResponse {
+    (
+        [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
+        ADMIN_JS,
+    )
 }
 
 fn init_tracing() {
