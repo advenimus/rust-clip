@@ -15,11 +15,12 @@ use crate::commands::open_or_focus;
 const TRAY_ID: &str = "rustclip-tray";
 
 pub fn install(app: &AppHandle) -> Result<()> {
-    let icon_bytes = include_bytes!("../icons/icon.png");
+    let icon_bytes = include_bytes!("../icons/logo-white.png");
     let icon = Image::from_bytes(icon_bytes)?;
     let menu = build_initial_menu(app)?;
     let _tray: TrayIcon = TrayIconBuilder::with_id(TRAY_ID)
         .icon(icon)
+        .icon_as_template(true)
         .tooltip("RustClip")
         .menu(&menu)
         .show_menu_on_left_click(true)

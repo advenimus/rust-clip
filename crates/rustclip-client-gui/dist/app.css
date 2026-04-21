@@ -36,8 +36,8 @@ a:hover { color: var(--accent); }
   background: var(--surface);
   border-bottom: 1px solid var(--border);
 }
-.brand { font-weight: 600; letter-spacing: -0.01em; }
-.brand-mark { color: var(--accent); font-family: var(--font-mono); }
+.brand { font-weight: 600; letter-spacing: -0.01em; display: inline-flex; align-items: center; gap: 8px; }
+.brand-mark { width: 26px; height: 26px; display: block; object-fit: contain; }
 .tabs { display: flex; gap: 18px; }
 .tabs a { color: var(--text-muted); font-size: 13px; }
 .tabs a.active { color: var(--text); border-bottom: 2px solid var(--accent); padding-bottom: 2px; }

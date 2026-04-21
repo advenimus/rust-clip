@@ -52,6 +52,11 @@
             {% endif %}
           </td>
           <td class="row-actions">
+            <form method="post" action="/admin/users/{{ u.id }}/reset-password" class="inline reset-pw"
+                  onsubmit="return confirm('Reset password for {{ u.username }}?\n\nThis will:\n  • Sign out every device the user has.\n  • Discard any clipboard events still buffered on the server (encrypted with the old key).\n\nLeave the field blank to let the server generate a password; the new password is shown once on the next screen.');">
+              <input type="password" name="new_password" placeholder="leave blank to auto-generate" autocomplete="new-password" />
+              <button type="submit" class="btn btn-ghost">Reset password</button>
+            </form>
             {% if u.is_admin %}
             {% else %}
               <form method="post" action="/admin/users/{{ u.id }}/reset-enrollment" class="inline">

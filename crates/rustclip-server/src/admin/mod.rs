@@ -31,6 +31,10 @@ pub fn router(auth_limiter: rate_limit::RateLimiter) -> Router<AppState> {
             "/users/{id}/reset-enrollment",
             post(users::reset_enrollment),
         )
+        .route(
+            "/users/{id}/reset-password",
+            post(users::reset_password),
+        )
         .route("/devices", get(devices::list))
         .route("/devices/{id}/revoke", post(devices::revoke))
         .route("/audit-log", get(audit_page::list))
