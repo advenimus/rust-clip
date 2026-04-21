@@ -7,24 +7,30 @@ on:
 
 jobs:
   build:
-    name: Build ${{ matrix.target }}
-    runs-on: ${{ matrix.runner }}
+    name: Build ${{ matrix.platform.label }}
+    runs-on: ${{ matrix.platform.runner }}
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: x86_64-apple-darwin
+        platform:
+          - label: macos-x86_64
             runner: macos-13
-            archive: rustclip-client-${{ github.ref_name }}-macos-x86_64.tar.gz
-          - target: aarch64-apple-darwin
+            rust-target: x86_64-apple-darwin
+            tauri-args: --target x86_64-apple-darwin
+          - label: macos-aarch64
             runner: macos-14
-            archive: rustclip-client-${{ github.ref_name }}-macos-aarch64.tar.gz
-          - target: x86_64-unknown-linux-gnu
-            runner: ubuntu-latest
-            archive: rustclip-client-${{ github.ref_name }}-linux-x86_64.tar.gz
-          - target: x86_64-pc-windows-msvc
+            rust-target: aarch64-apple-darwin
+            tauri-args: --target aarch64-apple-darwin
+          - label: linux-x86_64
+            runner: ubuntu-22.04
+            rust-target: x86_64-unknown-linux-gnu
+            tauri-args: ''
+          - label: windows-x86_64
             runner: windows-latest
-            archive: rustclip-client-${{ github.ref_name }}-windows-x86_64.zip
+            rust-target: x86_64-pc-windows-msvc
+            tauri-args: ''
 
     steps:
       - uses: actions/checkout@v4
@@ -33,11 +39,11 @@ jobs:
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.88.0
-          targets: ${{ matrix.target }}
+          targets: ${{ matrix.platform.rust-target }}
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          key: ${{ matrix.platform.label }}
 
       - name: Install Linux clipboard + Tauri deps
         if: runner.os == 'Linux'
@@ -49,53 +55,51 @@ jobs:
             libgtk-3-dev libayatana-appindicator3-dev librsvg2-dev \
             libsoup-3.0-dev
 
-      - name: Build CLI client
-        run: cargo build --release --locked --target ${{ matrix.target }} -p rustclip-client
+      - name: Build CLI binary
+        shell: bash
+        run: cargo build --release --locked --target ${{ matrix.platform.rust-target }} -p rustclip-client
 
-      - name: Build desktop GUI
-        run: cargo build --release --locked --target ${{ matrix.target }} -p rustclip-client-gui
+      - name: Build + publish desktop app (Tauri)
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          projectPath: crates/rustclip-client-gui
+          tagName: ${{ github.ref_name }}
+          releaseName: 'RustClip ${{ github.ref_name }}'
+          releaseBody: |
+            Desktop app for macOS, Windows, and Linux. CLI binary attached alongside.
 
-      - name: Package (Unix)
+            macOS builds are **unsigned** — after downloading, run:
+              xattr -d com.apple.quarantine /Applications/RustClip.app
+            Windows SmartScreen may warn on first launch (More info → Run anyway).
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.platform.tauri-args }}
+
+      - name: Package CLI (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          staging=$(mktemp -d)
-          cp "target/${{ matrix.target }}/release/rustclip-client" "$staging/"
-          cp "target/${{ matrix.target }}/release/rustclip-client-gui" "$staging/"
-          cp README.md "$staging/" 2>/dev/null || true
-          tar -C "$staging" -czf "${{ matrix.archive }}" .
+          mkdir -p cli-dist
+          cp "target/${{ matrix.platform.rust-target }}/release/rustclip-client" cli-dist/
+          tar -C cli-dist -czf "rustclip-cli-${{ github.ref_name }}-${{ matrix.platform.label }}.tar.gz" rustclip-client
 
-      - name: Package (Windows)
+      - name: Package CLI (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $staging = New-Item -ItemType Directory -Path (Join-Path $env:RUNNER_TEMP "pkg")
-          Copy-Item "target/${{ matrix.target }}/release/rustclip-client.exe" $staging
-          Copy-Item "target/${{ matrix.target }}/release/rustclip-client-gui.exe" $staging
-          if (Test-Path README.md) { Copy-Item README.md $staging }
-          Compress-Archive -Path "$staging/*" -DestinationPath "${{ matrix.archive }}"
+          New-Item -ItemType Directory -Force -Path cli-dist | Out-Null
+          Copy-Item "target/${{ matrix.platform.rust-target }}/release/rustclip-client.exe" cli-dist/
+          Compress-Archive -Path "cli-dist/rustclip-client.exe" -DestinationPath "rustclip-cli-${{ github.ref_name }}-${{ matrix.platform.label }}.zip"
 
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}
-
-  publish:
-    name: Attach to Release
-    needs: build
-    runs-on: ubuntu-latest
-    if: startsWith(github.ref, 'refs/tags/v')
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-
-      - name: Publish GitHub Release
+      - name: Attach CLI to release
+        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
-          files: dist/*
+          files: |
+            rustclip-cli-${{ github.ref_name }}-${{ matrix.platform.label }}.tar.gz
+            rustclip-cli-${{ github.ref_name }}-${{ matrix.platform.label }}.zip
+          tag_name: ${{ github.ref_name }}
           draft: true
-          generate_release_notes: true
+          fail_on_unmatched_files: false
