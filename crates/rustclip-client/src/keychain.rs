@@ -12,8 +12,10 @@ pub const SERVICE: &str = "rustclip";
 pub const KEY_SERVER_URL: &str = "server_url";
 pub const KEY_DEVICE_TOKEN: &str = "device_token";
 pub const KEY_USER_ID: &str = "user_id";
+pub const KEY_DEVICE_ID: &str = "device_id";
 pub const KEY_USERNAME: &str = "username";
 pub const KEY_CONTENT_SALT_B64: &str = "content_salt_b64";
+pub const KEY_CONTENT_KEY_B64: &str = "content_key_b64";
 
 pub fn set(key: &str, value: &str) -> Result<()> {
     let entry = Entry::new(SERVICE, key).with_context(|| format!("keychain entry for {key}"))?;
@@ -45,8 +47,10 @@ pub fn clear_all() -> Result<()> {
         KEY_SERVER_URL,
         KEY_DEVICE_TOKEN,
         KEY_USER_ID,
+        KEY_DEVICE_ID,
         KEY_USERNAME,
         KEY_CONTENT_SALT_B64,
+        KEY_CONTENT_KEY_B64,
     ] {
         delete(k)?;
     }

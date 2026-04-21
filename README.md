@@ -2,7 +2,7 @@
 
 Self-hosted universal clipboard sync. Text, images, and files, end-to-end encrypted, across Windows, macOS, and Linux.
 
-**Status:** Phase 2 in progress. Server API + CLI client are live (enrollment, login, logout, status). Clipboard sync (WS) and Tauri tray UI come in Phases 3-6.
+**Status:** Phase 3 text sync landed. Server WS hub + client sync daemon encrypt and exchange text clips across devices, with an offline queue, ack, and reconnect-with-backoff. Images come in Phase 4, files in Phase 5, tray UI + history in Phase 6.
 
 ## Architecture at a glance
 
@@ -29,6 +29,7 @@ rustclip-client enroll --server-url http://localhost:8080
 # enter the enrollment token and choose a password when prompted
 
 rustclip-client status   # verifies the stored token against the server
+rustclip-client sync     # start the clipboard sync daemon (foreground)
 rustclip-client logout   # revokes the device and clears the keychain
 ```
 

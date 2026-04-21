@@ -3,6 +3,7 @@
 //! Kept dependency-light so both sides depend on it without pulling in
 //! runtime-specific machinery (no tokio, no reqwest, no sqlx).
 
+pub mod protocol;
 pub mod rest;
 
 pub const PROTOCOL_VERSION: u32 = 1;

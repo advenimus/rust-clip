@@ -4,8 +4,9 @@ use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use rand::{RngCore, rngs::OsRng};
 use rustclip_shared::rest::{EnrollRequest, LoginRequest};
+use uuid::Uuid;
 
-use crate::{http::ServerClient, keychain};
+use crate::{crypto, http::ServerClient, keychain, sync};
 
 const CONTENT_SALT_BYTES: usize = 32;
 
@@ -49,6 +50,9 @@ pub async fn enroll(server_url: String, device_name: Option<String>) -> Result<(
         return Err(anyhow!("password must be at least 8 characters"));
     }
     let content_salt_b64 = random_content_salt();
+    let content_salt = BASE64.decode(content_salt_b64.as_bytes())?;
+    let content_key = crypto::derive_content_key(&password, &content_salt)?;
+    let content_key_b64 = BASE64.encode(content_key);
 
     let client = ServerClient::new(&server_url)?;
     let resp = client
@@ -65,13 +69,16 @@ pub async fn enroll(server_url: String, device_name: Option<String>) -> Result<(
         &server_url,
         &resp.device_token,
         &resp.user_id.to_string(),
+        &resp.device_id.to_string(),
         &resp.username,
         &content_salt_b64,
+        &content_key_b64,
     )?;
 
     println!("enrolled as {} ({})", resp.display_name, resp.username);
     println!("device id: {}", resp.device_id);
-    println!("device token stored in system keychain.");
+    println!("credentials stored in system keychain.");
+    println!("start syncing with: rustclip-client sync");
     Ok(())
 }
 
@@ -87,24 +94,57 @@ pub async fn login(
     let resp = client
         .login(&LoginRequest {
             username,
-            password,
+            password: password.clone(),
             device_name: device_name.clone(),
             platform: current_platform().to_string(),
         })
         .await?;
 
+    let content_salt = BASE64.decode(resp.content_salt_b64.as_bytes())?;
+    let content_key = crypto::derive_content_key(&password, &content_salt)?;
+    let content_key_b64 = BASE64.encode(content_key);
+
     persist_credentials(
         &server_url,
         &resp.device_token,
         &resp.user_id.to_string(),
+        &resp.device_id.to_string(),
         &resp.username,
         &resp.content_salt_b64,
+        &content_key_b64,
     )?;
 
     println!("logged in as {} ({})", resp.display_name, resp.username);
     println!("device id: {}", resp.device_id);
-    println!("device token stored in system keychain.");
+    println!("credentials stored in system keychain.");
+    println!("start syncing with: rustclip-client sync");
     Ok(())
+}
+
+pub async fn sync_cmd() -> Result<()> {
+    let server_url = keychain::get(keychain::KEY_SERVER_URL)?
+        .ok_or_else(|| anyhow!("not enrolled; run `enroll` or `login` first"))?;
+    let device_token = keychain::get(keychain::KEY_DEVICE_TOKEN)?
+        .ok_or_else(|| anyhow!("no device token stored"))?;
+    let device_id_str =
+        keychain::get(keychain::KEY_DEVICE_ID)?.ok_or_else(|| anyhow!("no device id stored"))?;
+    let device_id = Uuid::parse_str(&device_id_str).context("parsing device id")?;
+    let content_key_b64 = keychain::get(keychain::KEY_CONTENT_KEY_B64)?
+        .ok_or_else(|| anyhow!("no content key stored; re-login to rebuild"))?;
+    let content_key_bytes = BASE64
+        .decode(content_key_b64.as_bytes())
+        .context("decoding content key from keychain")?;
+    if content_key_bytes.len() != crypto::CONTENT_KEY_BYTES {
+        return Err(anyhow!(
+            "content key must be {} bytes",
+            crypto::CONTENT_KEY_BYTES
+        ));
+    }
+    let mut content_key = [0u8; 32];
+    content_key.copy_from_slice(&content_key_bytes);
+
+    println!("connecting to {server_url}");
+    sync::run(server_url, device_token, device_id, content_key).await
 }
 
 pub async fn status() -> Result<()> {
@@ -147,13 +187,17 @@ fn persist_credentials(
     server_url: &str,
     device_token: &str,
     user_id: &str,
+    device_id: &str,
     username: &str,
     content_salt_b64: &str,
+    content_key_b64: &str,
 ) -> Result<()> {
     keychain::set(keychain::KEY_SERVER_URL, server_url)?;
     keychain::set(keychain::KEY_DEVICE_TOKEN, device_token)?;
     keychain::set(keychain::KEY_USER_ID, user_id)?;
+    keychain::set(keychain::KEY_DEVICE_ID, device_id)?;
     keychain::set(keychain::KEY_USERNAME, username)?;
     keychain::set(keychain::KEY_CONTENT_SALT_B64, content_salt_b64)?;
+    keychain::set(keychain::KEY_CONTENT_KEY_B64, content_key_b64)?;
     Ok(())
 }

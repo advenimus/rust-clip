@@ -1,6 +1,9 @@
+mod clipboard;
 mod commands;
+mod crypto;
 mod http;
 mod keychain;
+mod sync;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
@@ -39,6 +42,8 @@ enum Command {
     Logout,
     /// Clear local keychain entries without calling the server.
     Reset,
+    /// Run the clipboard sync daemon.
+    Sync,
 }
 
 #[tokio::main]
@@ -61,6 +66,7 @@ async fn main() -> Result<()> {
             commands::reset()?;
             Ok(())
         }
+        Command::Sync => commands::sync_cmd().await,
     }
 }
 

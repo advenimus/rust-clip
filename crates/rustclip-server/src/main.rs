@@ -13,6 +13,7 @@ mod sweeper;
 #[cfg(test)]
 mod test_util;
 mod tokens;
+mod ws;
 
 use std::sync::Arc;
 
@@ -31,7 +32,7 @@ use tower_sessions_sqlx_store::SqliteStore;
 use tracing::info;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::{config::Config, state::AppState};
+use crate::{config::Config, state::AppState, ws::hub::Hub};
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -67,6 +68,7 @@ async fn main() -> Result<()> {
     let state = AppState {
         db: pool,
         config: Arc::new(config.clone()),
+        hub: Arc::new(Hub::new()),
     };
 
     let app = Router::new()
@@ -74,6 +76,7 @@ async fn main() -> Result<()> {
         .route("/static/app.css", get(serve_app_css))
         .nest("/admin", admin::router())
         .nest("/api/v1", api::router())
+        .nest("/ws", ws::router())
         .with_state(state)
         .layer(session_layer)
         .layer(TraceLayer::new_for_http());
