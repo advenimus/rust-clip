@@ -8,7 +8,7 @@ use uuid::Uuid;
 
 use std::path::PathBuf;
 
-use crate::{crypto, files, http::ServerClient, keychain, sync};
+use crate::{crypto, files, history::History, http::ServerClient, keychain, sync};
 
 const CONTENT_SALT_BYTES: usize = 32;
 
@@ -185,6 +185,45 @@ pub fn reset() -> Result<()> {
     Ok(())
 }
 
+pub fn show_history(limit: i64) -> Result<()> {
+    let history = History::open_default()?;
+    let items = history.list(limit)?;
+    if items.is_empty() {
+        println!("history is empty.");
+        return Ok(());
+    }
+    for item in items {
+        let when = format_millis(item.created_at);
+        let kind = match item.kind {
+            crate::history::HistoryKind::Text => "text",
+            crate::history::HistoryKind::Image => "image",
+            crate::history::HistoryKind::Bundle => "bundle",
+        };
+        println!(
+            "{when} [{dir:<8}] {kind:<6} {size:>8} B  {preview}",
+            dir = item.direction,
+            size = item.size_bytes,
+            preview = item.preview.replace('\n', " "),
+        );
+    }
+    Ok(())
+}
+
+pub fn clear_history() -> Result<()> {
+    let mut history = History::open_default()?;
+    history.clear()?;
+    println!("history cleared.");
+    Ok(())
+}
+
+fn format_millis(ms: i64) -> String {
+    use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+    OffsetDateTime::from_unix_timestamp_nanos((ms as i128) * 1_000_000)
+        .ok()
+        .and_then(|dt| dt.format(&Rfc3339).ok())
+        .unwrap_or_else(|| ms.to_string())
+}
+
 pub async fn send_files(paths: Vec<PathBuf>) -> Result<()> {
     let server_url = keychain::get(keychain::KEY_SERVER_URL)?
         .ok_or_else(|| anyhow!("not enrolled; run `enroll` or `login` first"))?;
@@ -210,8 +249,19 @@ pub async fn send_files(paths: Vec<PathBuf>) -> Result<()> {
         bundle.summary, bundle.total_bytes
     );
 
+    let summary = bundle.summary.clone();
+    let total_bytes = bundle.total_bytes as i64;
     let cipher = crypto::Cipher::new(&content_key);
-    sync::send_bundle_one_shot(&server_url, &device_token, &cipher, bundle).await?;
+    let event_id = sync::send_bundle_one_shot(&server_url, &device_token, &cipher, bundle).await?;
+
+    if let Ok(mut h) = History::open_default() {
+        let _ = h.record_bundle(
+            crate::history::Direction::Outgoing,
+            &summary,
+            total_bytes,
+            event_id,
+        );
+    }
     println!("sent.");
     Ok(())
 }

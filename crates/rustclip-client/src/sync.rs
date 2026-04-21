@@ -1,7 +1,11 @@
 //! The `rustclip-client sync` daemon: keeps a WebSocket open, mirrors the
 //! local clipboard to the server and applies incoming events to the clipboard.
 
-use std::{collections::VecDeque, time::Duration};
+use std::{
+    collections::VecDeque,
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
@@ -26,6 +30,7 @@ use crate::{
     clipboard_files,
     crypto::Cipher,
     files::{self, FileBundle},
+    history::{Direction, History},
     http::ServerClient,
     image_codec,
 };
@@ -44,6 +49,7 @@ pub async fn run(
     let ws_url = http_to_ws(&server_url)?;
     let cipher = Cipher::new(&content_key);
     let rest = ServerClient::new(&server_url)?;
+    let history = Arc::new(Mutex::new(History::open_default()?));
 
     let (event_tx, event_rx) = mpsc::channel::<ClipEvent>(64);
     let clipboard = clipboard::spawn_watcher(event_tx)?;
@@ -62,6 +68,7 @@ pub async fn run(
             &mut event_rx,
             &clipboard,
             &mut seen,
+            &history,
         )
         .await
         {
@@ -88,6 +95,7 @@ async fn session(
     event_rx: &mut mpsc::Receiver<ClipEvent>,
     clipboard: &ClipboardHandle,
     seen: &mut SeenEvents,
+    history: &Arc<Mutex<History>>,
 ) -> Result<()> {
     let mut request = ws_url
         .into_client_request()
@@ -119,8 +127,12 @@ async fn session(
                         .await;
                     return Ok(());
                 };
-                let outgoing = build_outgoing(cipher, rest, device_token, event).await?;
+                let (outgoing, preview) =
+                    build_outgoing(cipher, rest, device_token, event).await?;
                 seen.insert(outgoing.id);
+                if let Err(e) = record_outgoing(history, &outgoing, &preview) {
+                    warn!(error = %e, "failed to record outgoing history");
+                }
                 let msg = ClientMessage::ClipEvent(outgoing);
                 let wire = serde_json::to_string(&msg)?;
                 writer
@@ -135,7 +147,7 @@ async fn session(
                 match frame {
                     Message::Text(text) => {
                         match serde_json::from_str::<ServerMessage>(&text) {
-                            Ok(msg) => handle_server(msg, cipher, rest, device_token, device_id, clipboard, seen).await,
+                            Ok(msg) => handle_server(msg, cipher, rest, device_token, device_id, clipboard, seen, history).await,
                             Err(e) => warn!(error = %e, "unparseable server message"),
                         }
                     }
@@ -157,23 +169,67 @@ async fn session(
     }
 }
 
+/// A compact representation of the outgoing payload we keep after the
+/// ClipEvent is built, used to record a local history entry. Keeps the
+/// decrypted metadata separate from the wire event.
+pub enum OutgoingPreview {
+    Text(String),
+    Image {
+        width: usize,
+        height: usize,
+    },
+    #[allow(dead_code)]
+    Bundle {
+        summary: String,
+    },
+}
+
 async fn build_outgoing(
     cipher: &Cipher,
     rest: &ServerClient,
     device_token: &str,
     event: ClipEvent,
-) -> Result<ClipEventMessage> {
+) -> Result<(ClipEventMessage, OutgoingPreview)> {
     match event {
         ClipEvent::Text(text) => {
             let (nonce, ciphertext) = cipher.encrypt(text.as_bytes())?;
             let plain_len = text.len() as i64;
-            build_event(ciphertext, nonce, MIME_TEXT, plain_len, rest, device_token).await
+            let msg =
+                build_event(ciphertext, nonce, MIME_TEXT, plain_len, rest, device_token).await?;
+            Ok((msg, OutgoingPreview::Text(text)))
         }
         ClipEvent::Image(image) => {
             let png_bytes = image_codec::encode_png(&image)?;
             let plain_len = png_bytes.len() as i64;
+            let width = image.width;
+            let height = image.height;
             let (nonce, ciphertext) = cipher.encrypt(&png_bytes)?;
-            build_event(ciphertext, nonce, MIME_PNG, plain_len, rest, device_token).await
+            let msg =
+                build_event(ciphertext, nonce, MIME_PNG, plain_len, rest, device_token).await?;
+            Ok((msg, OutgoingPreview::Image { width, height }))
+        }
+    }
+}
+
+fn record_outgoing(
+    history: &Arc<Mutex<History>>,
+    event: &ClipEventMessage,
+    preview: &OutgoingPreview,
+) -> Result<()> {
+    let mut h = history
+        .lock()
+        .map_err(|_| anyhow!("history mutex poisoned"))?;
+    match preview {
+        OutgoingPreview::Text(text) => h.record_text(Direction::Outgoing, text, event.id),
+        OutgoingPreview::Image { width, height } => h.record_image(
+            Direction::Outgoing,
+            *width as u32,
+            *height as u32,
+            event.size_bytes,
+            event.id,
+        ),
+        OutgoingPreview::Bundle { summary } => {
+            h.record_bundle(Direction::Outgoing, summary, event.size_bytes, event.id)
         }
     }
 }
@@ -190,7 +246,7 @@ pub async fn send_bundle_one_shot(
     device_token: &str,
     cipher: &Cipher,
     bundle: FileBundle,
-) -> Result<()> {
+) -> Result<Uuid> {
     let rest = ServerClient::new(server_url)?;
     let plain_len = bundle.tar_bytes.len() as i64;
     let (nonce, ciphertext) = cipher.encrypt(&bundle.tar_bytes)?;
@@ -203,6 +259,7 @@ pub async fn send_bundle_one_shot(
         device_token,
     )
     .await?;
+    let event_id = event.id;
 
     let ws_url = http_to_ws(server_url)?;
     let mut request = ws_url
@@ -241,7 +298,7 @@ pub async fn send_bundle_one_shot(
                                     reason: "sent".into(),
                                 })))
                                 .await;
-                            return Ok(());
+                            return Ok(event_id);
                         }
                         ServerMessage::Error { code, message } => {
                             return Err(anyhow!("server error {code}: {message}"));
@@ -305,6 +362,7 @@ async fn handle_server(
     device_id: Uuid,
     clipboard: &ClipboardHandle,
     seen: &mut SeenEvents,
+    history: &Arc<Mutex<History>>,
 ) {
     match msg {
         ServerMessage::BacklogStart => info!("draining backlog"),
@@ -324,7 +382,9 @@ async fn handle_server(
                 return;
             }
             seen.insert(event.id);
-            if let Err(e) = apply_incoming(event, cipher, rest, device_token, clipboard).await {
+            if let Err(e) =
+                apply_incoming(event, cipher, rest, device_token, clipboard, history).await
+            {
                 warn!(error = %e, "failed to apply incoming clip event");
             }
         }
@@ -337,6 +397,7 @@ async fn apply_incoming(
     rest: &ServerClient,
     device_token: &str,
     clipboard: &ClipboardHandle,
+    history: &Arc<Mutex<History>>,
 ) -> Result<()> {
     let (ciphertext, nonce) = match event.content {
         ContentRef::Inline {
@@ -375,17 +436,31 @@ async fn apply_incoming(
                 event_id = %event.id,
                 "received text clip"
             );
-            clipboard.write_text(text)?;
+            clipboard.write_text(text.clone())?;
+            if let Ok(mut h) = history.lock() {
+                let _ = h.record_text(Direction::Incoming, &text, event.id);
+            }
         }
         MIME_PNG => {
             let image = image_codec::decode_png(&plaintext)?;
+            let width = image.width;
+            let height = image.height;
             info!(
-                width = image.width,
-                height = image.height,
+                width,
+                height,
                 event_id = %event.id,
                 "received image clip"
             );
             clipboard.write_image(image)?;
+            if let Ok(mut h) = history.lock() {
+                let _ = h.record_image(
+                    Direction::Incoming,
+                    width as u32,
+                    height as u32,
+                    event.size_bytes,
+                    event.id,
+                );
+            }
         }
         MIME_BUNDLE => {
             let dest = files::inbox_dir().join(event.id.to_string());
@@ -400,9 +475,11 @@ async fn apply_incoming(
                 info!(file = %p.display(), "inbox file");
             }
             if let Err(e) = clipboard_files::write_file_list(&written) {
-                // Non-fatal: files are already on disk, user can still copy
-                // them manually if the pasteboard write failed.
                 warn!(error = %e, "pasteboard file-list write failed");
+            }
+            let summary = summarize_incoming_bundle(&written);
+            if let Ok(mut h) = history.lock() {
+                let _ = h.record_bundle(Direction::Incoming, &summary, event.size_bytes, event.id);
             }
         }
         other => {
@@ -410,6 +487,17 @@ async fn apply_incoming(
         }
     }
     Ok(())
+}
+
+fn summarize_incoming_bundle(paths: &[std::path::PathBuf]) -> String {
+    if paths.len() == 1 {
+        paths[0]
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "file".into())
+    } else {
+        format!("{} files", paths.len())
+    }
 }
 
 fn http_to_ws(server_url: &str) -> Result<String> {

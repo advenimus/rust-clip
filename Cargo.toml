@@ -61,6 +61,7 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 png = "0.17"
 tar = "0.4"
 dirs = "5"
+rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Native macOS pasteboard bindings for file URLs
 objc2 = "0.6"

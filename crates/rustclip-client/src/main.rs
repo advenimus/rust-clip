@@ -3,6 +3,7 @@ mod clipboard_files;
 mod commands;
 mod crypto;
 mod files;
+mod history;
 mod http;
 mod image_codec;
 mod keychain;
@@ -53,6 +54,14 @@ enum Command {
         #[arg(required = true)]
         paths: Vec<std::path::PathBuf>,
     },
+    /// Show the local clipboard history.
+    History {
+        /// How many recent items to display.
+        #[arg(long, default_value_t = 20)]
+        limit: i64,
+    },
+    /// Wipe local clipboard history.
+    HistoryClear,
 }
 
 #[tokio::main]
@@ -77,6 +86,8 @@ async fn main() -> Result<()> {
         }
         Command::Sync => commands::sync_cmd().await,
         Command::SendFiles { paths } => commands::send_files(paths).await,
+        Command::History { limit } => commands::show_history(limit),
+        Command::HistoryClear => commands::clear_history(),
     }
 }
 
