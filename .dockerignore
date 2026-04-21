@@ -1,0 +1,12 @@
+/target
+/data
+.env
+.env.*
+/logs
+/.git
+/.github
+/docs
+*.md
+.DS_Store
+.idea/
+.vscode/
