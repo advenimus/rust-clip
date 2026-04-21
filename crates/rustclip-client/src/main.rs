@@ -2,6 +2,7 @@ mod clipboard;
 mod commands;
 mod crypto;
 mod http;
+mod image_codec;
 mod keychain;
 mod sync;
 

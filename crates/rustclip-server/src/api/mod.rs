@@ -9,6 +9,9 @@ use rustclip_shared::rest::{ErrorBody, ErrorResponse};
 use crate::state::AppState;
 
 pub mod auth;
+pub mod blobs;
+#[cfg(test)]
+mod blobs_test;
 pub mod device_auth;
 pub mod me;
 
@@ -18,6 +21,7 @@ pub fn router() -> Router<AppState> {
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
         .route("/me", get(me::show))
+        .nest("/blobs", blobs::router())
 }
 
 pub struct ApiError {

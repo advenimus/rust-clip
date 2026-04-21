@@ -1,5 +1,7 @@
 use std::time::Duration;
 
+use sqlx::FromRow;
+use tokio::fs;
 use tracing::{debug, warn};
 
 use crate::db::{DbPool, now_millis};
@@ -38,6 +40,20 @@ pub async fn sweep_once(pool: &DbPool) -> sqlx::Result<SweepReport> {
         .await?
         .rows_affected();
 
+    // Remove the on-disk ciphertext before deleting the metadata row so a
+    // crash between the two leaves orphaned files rather than orphaned rows.
+    let expired_blobs: Vec<ExpiredBlob> =
+        sqlx::query_as::<_, ExpiredBlob>("SELECT storage_path FROM blobs WHERE expires_at < ?")
+            .bind(now)
+            .fetch_all(pool)
+            .await?;
+    for blob in &expired_blobs {
+        if let Err(e) = fs::remove_file(&blob.storage_path).await {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                warn!(error = ?e, path = %blob.storage_path, "removing expired blob file");
+            }
+        }
+    }
     let blobs = sqlx::query("DELETE FROM blobs WHERE expires_at < ?")
         .bind(now)
         .execute(pool)
@@ -51,6 +67,11 @@ pub async fn sweep_once(pool: &DbPool) -> sqlx::Result<SweepReport> {
     };
     debug!(?report, "sweeper completed");
     Ok(report)
+}
+
+#[derive(FromRow)]
+struct ExpiredBlob {
+    storage_path: String,
 }
 
 #[allow(dead_code)]
@@ -111,6 +132,43 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(remaining, 1);
+    }
+
+    #[tokio::test]
+    async fn sweeper_removes_expired_blob_file() {
+        use tempfile::TempDir;
+
+        let pool = test_pool().await;
+        let tmp = TempDir::new().unwrap();
+        let expired_path = tmp.path().join("expired.bin");
+        tokio::fs::write(&expired_path, b"old").await.unwrap();
+        let alive_path = tmp.path().join("alive.bin");
+        tokio::fs::write(&alive_path, b"new").await.unwrap();
+
+        sqlx::query(
+            "INSERT INTO blobs (id, sha256, byte_length, storage_path, created_at, expires_at) \
+             VALUES (?, '', 3, ?, 0, 1)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(expired_path.to_string_lossy().to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "INSERT INTO blobs (id, sha256, byte_length, storage_path, created_at, expires_at) \
+             VALUES (?, '', 3, ?, 0, ?)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(alive_path.to_string_lossy().to_string())
+        .bind(i64::MAX)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let report = sweep_once(&pool).await.unwrap();
+        assert_eq!(report.blobs, 1);
+        assert!(!expired_path.exists(), "expired blob file should be gone");
+        assert!(alive_path.exists(), "live blob file should remain");
     }
 
     #[tokio::test]

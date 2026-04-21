@@ -3,9 +3,11 @@
 use anyhow::{Context, Result, anyhow};
 use reqwest::{Client, StatusCode};
 use rustclip_shared::rest::{
-    EnrollRequest, EnrollResponse, ErrorResponse, LoginRequest, LoginResponse, MeResponse,
+    BlobUploadResponse, EnrollRequest, EnrollResponse, ErrorResponse, LoginRequest, LoginResponse,
+    MeResponse,
 };
 use std::time::Duration;
+use uuid::Uuid;
 
 pub struct ServerClient {
     http: Client,
@@ -51,6 +53,34 @@ impl ServerClient {
             return Err(anyhow!(e));
         }
         Ok(())
+    }
+
+    pub async fn upload_blob(
+        &self,
+        token: &str,
+        ciphertext: Vec<u8>,
+    ) -> Result<BlobUploadResponse> {
+        let url = format!("{}/api/v1/blobs", self.base_url);
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(token)
+            .header("content-type", "application/octet-stream")
+            .body(ciphertext)
+            .send()
+            .await?;
+        parse_json(resp).await
+    }
+
+    pub async fn download_blob(&self, token: &str, blob_id: Uuid) -> Result<Vec<u8>> {
+        let url = format!("{}/api/v1/blobs/{}", self.base_url, blob_id);
+        let resp = self.http.get(&url).bearer_auth(token).send().await?;
+        if !resp.status().is_success() {
+            let e = extract_error(resp).await?;
+            return Err(anyhow!(e));
+        }
+        let bytes = resp.bytes().await.context("reading blob body")?;
+        Ok(bytes.to_vec())
     }
 }
 

@@ -58,6 +58,16 @@ pub struct MeResponse {
     pub device: DeviceInfo,
 }
 
+/// Response from `POST /api/v1/blobs`. The server has persisted the
+/// ciphertext to durable storage and returns its id and content hash. The
+/// client then announces the blob via a WS `clip_event`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BlobUploadResponse {
+    pub blob_id: Uuid,
+    pub sha256_hex: String,
+    pub byte_length: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub error: ErrorBody,

@@ -8,6 +8,10 @@ pub mod rest;
 
 pub const PROTOCOL_VERSION: u32 = 1;
 
+/// Maximum ciphertext size that may ride inline on a WS `clip_event`. Larger
+/// payloads must be uploaded via the blob REST endpoint and referenced by id.
+pub const MAX_INLINE_CIPHERTEXT_BYTES: usize = 64 * 1024;
+
 pub const PLATFORM_WINDOWS: &str = "windows";
 pub const PLATFORM_MACOS: &str = "macos";
 pub const PLATFORM_LINUX: &str = "linux";

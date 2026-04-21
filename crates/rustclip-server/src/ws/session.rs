@@ -3,7 +3,10 @@
 use axum::extract::ws::{Message, WebSocket};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
-use rustclip_shared::protocol::{ClientMessage, ClipEventMessage, ContentRef, ServerMessage};
+use rustclip_shared::{
+    MAX_INLINE_CIPHERTEXT_BYTES,
+    protocol::{ClientMessage, ClipEventMessage, ContentRef, ServerMessage},
+};
 use sqlx::FromRow;
 use time::{Duration, OffsetDateTime};
 use tokio::sync::broadcast;
@@ -13,10 +16,6 @@ use uuid::Uuid;
 use crate::{
     api::device_auth::DeviceAuth, db::now_millis, state::AppState, ws::hub::ClipBroadcast,
 };
-
-/// Maximum single-message size the server will accept. Guards against abuse
-/// and runaway memory. Phase 4/5 will move large payloads to the blob path.
-const MAX_INLINE_CIPHERTEXT_BYTES: usize = 1024 * 1024; // 1 MiB of ciphertext
 
 pub async fn run(socket: WebSocket, state: AppState, auth: DeviceAuth) {
     info!(user_id = %auth.user_id, device_id = %auth.device_id, "ws connected");
