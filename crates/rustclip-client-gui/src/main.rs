@@ -40,6 +40,12 @@ fn main() {
         ))
         .manage(app_state.clone())
         .setup(move |app| {
+            // Menu-bar-only on macOS: no dock tile, no application menu,
+            // tray icon is the entire visible surface. Windows open as
+            // floating panels and don't register dock presence.
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+
             tray::install(app.handle())?;
 
             // If already enrolled, spin sync up on launch.
