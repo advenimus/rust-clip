@@ -15,20 +15,32 @@ use crate::{
     commands, crypto, files,
     history::{self, History, HistoryItem, HistoryKind},
     http::ServerClient,
-    keychain, sync,
+    keychain::{self, Credentials},
+    sync,
 };
 
 const CONTENT_SALT_BYTES: usize = 32;
 
 /// Snapshot of locally-stored credentials. `None` means the device is
 /// not enrolled; otherwise the caller can start a sync or call
-/// `cmd_me` on the server.
+/// `remote_me` on the server.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AccountStatus {
     pub server_url: String,
     pub username: String,
     pub user_id: String,
     pub device_id: String,
+}
+
+impl From<&Credentials> for AccountStatus {
+    fn from(c: &Credentials) -> Self {
+        Self {
+            server_url: c.server_url.clone(),
+            username: c.username.clone(),
+            user_id: c.user_id.clone(),
+            device_id: c.device_id.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,33 +60,13 @@ pub struct LoginInput {
 }
 
 pub fn local_account() -> Result<Option<AccountStatus>> {
-    let Some(server_url) = keychain::get(keychain::KEY_SERVER_URL)? else {
-        return Ok(None);
-    };
-    let Some(username) = keychain::get(keychain::KEY_USERNAME)? else {
-        return Ok(None);
-    };
-    let Some(user_id) = keychain::get(keychain::KEY_USER_ID)? else {
-        return Ok(None);
-    };
-    let Some(device_id) = keychain::get(keychain::KEY_DEVICE_ID)? else {
-        return Ok(None);
-    };
-    Ok(Some(AccountStatus {
-        server_url,
-        username,
-        user_id,
-        device_id,
-    }))
+    Ok(keychain::load()?.as_ref().map(AccountStatus::from))
 }
 
 pub async fn remote_me() -> Result<MeResponse> {
-    let server_url = keychain::get(keychain::KEY_SERVER_URL)?
-        .ok_or_else(|| anyhow!("not enrolled"))?;
-    let token = keychain::get(keychain::KEY_DEVICE_TOKEN)?
-        .ok_or_else(|| anyhow!("no device token"))?;
-    let client = ServerClient::new(&server_url)?;
-    client.me(&token).await
+    let creds = keychain::load()?.ok_or_else(|| anyhow!("not enrolled"))?;
+    let client = ServerClient::new(&creds.server_url)?;
+    client.me(&creds.device_token).await
 }
 
 pub async fn enroll(input: EnrollInput) -> Result<AccountStatus> {
@@ -93,27 +85,22 @@ pub async fn enroll(input: EnrollInput) -> Result<AccountStatus> {
             enrollment_token: input.enrollment_token,
             password: input.password,
             content_salt_b64: content_salt_b64.clone(),
-            device_name: device_name.clone(),
+            device_name,
             platform: commands::current_platform().to_string(),
         })
         .await?;
 
-    persist_credentials(
-        &input.server_url,
-        &resp.device_token,
-        &resp.user_id.to_string(),
-        &resp.device_id.to_string(),
-        &resp.username,
-        &content_salt_b64,
-        &content_key_b64,
-    )?;
-
-    Ok(AccountStatus {
+    let creds = Credentials {
         server_url: input.server_url,
-        username: resp.username,
+        device_token: resp.device_token,
         user_id: resp.user_id.to_string(),
         device_id: resp.device_id.to_string(),
-    })
+        username: resp.username,
+        content_salt_b64,
+        content_key_b64,
+    };
+    keychain::save(&creds)?;
+    Ok(AccountStatus::from(&creds))
 }
 
 pub async fn login(input: LoginInput) -> Result<AccountStatus> {
@@ -125,7 +112,7 @@ pub async fn login(input: LoginInput) -> Result<AccountStatus> {
         .login(&LoginRequest {
             username: input.username,
             password: input.password.clone(),
-            device_name: device_name.clone(),
+            device_name,
             platform: commands::current_platform().to_string(),
         })
         .await?;
@@ -134,37 +121,29 @@ pub async fn login(input: LoginInput) -> Result<AccountStatus> {
     let content_key = crypto::derive_content_key(&input.password, &content_salt)?;
     let content_key_b64 = BASE64.encode(content_key);
 
-    persist_credentials(
-        &input.server_url,
-        &resp.device_token,
-        &resp.user_id.to_string(),
-        &resp.device_id.to_string(),
-        &resp.username,
-        &resp.content_salt_b64,
-        &content_key_b64,
-    )?;
-
-    Ok(AccountStatus {
+    let creds = Credentials {
         server_url: input.server_url,
-        username: resp.username,
+        device_token: resp.device_token,
         user_id: resp.user_id.to_string(),
         device_id: resp.device_id.to_string(),
-    })
+        username: resp.username,
+        content_salt_b64: resp.content_salt_b64,
+        content_key_b64,
+    };
+    keychain::save(&creds)?;
+    Ok(AccountStatus::from(&creds))
 }
 
 pub async fn logout() -> Result<()> {
-    let server_url =
-        keychain::get(keychain::KEY_SERVER_URL)?.ok_or_else(|| anyhow!("no server configured"))?;
-    let token = keychain::get(keychain::KEY_DEVICE_TOKEN)?
-        .ok_or_else(|| anyhow!("no device token stored"))?;
-    let client = ServerClient::new(&server_url)?;
-    let _ = client.logout(&token).await;
-    keychain::clear_all()?;
+    let creds = keychain::load()?.ok_or_else(|| anyhow!("not enrolled"))?;
+    let client = ServerClient::new(&creds.server_url)?;
+    let _ = client.logout(&creds.device_token).await;
+    keychain::clear()?;
     Ok(())
 }
 
 pub fn reset() -> Result<()> {
-    keychain::clear_all()
+    keychain::clear()
 }
 
 pub struct SyncContext {
@@ -175,17 +154,11 @@ pub struct SyncContext {
 }
 
 pub fn load_sync_context() -> Result<SyncContext> {
-    let server_url = keychain::get(keychain::KEY_SERVER_URL)?
+    let creds = keychain::load()?
         .ok_or_else(|| anyhow!("not enrolled; run enroll or login first"))?;
-    let device_token = keychain::get(keychain::KEY_DEVICE_TOKEN)?
-        .ok_or_else(|| anyhow!("no device token stored"))?;
-    let device_id_str = keychain::get(keychain::KEY_DEVICE_ID)?
-        .ok_or_else(|| anyhow!("no device id stored"))?;
-    let device_id = Uuid::parse_str(&device_id_str).context("parsing device id")?;
-    let content_key_b64 = keychain::get(keychain::KEY_CONTENT_KEY_B64)?
-        .ok_or_else(|| anyhow!("no content key stored; re-login to rebuild"))?;
+    let device_id = Uuid::parse_str(&creds.device_id).context("parsing device id")?;
     let content_key_bytes = BASE64
-        .decode(content_key_b64.as_bytes())
+        .decode(creds.content_key_b64.as_bytes())
         .context("decoding content key from keychain")?;
     if content_key_bytes.len() != crypto::CONTENT_KEY_BYTES {
         return Err(anyhow!(
@@ -196,8 +169,8 @@ pub fn load_sync_context() -> Result<SyncContext> {
     let mut content_key = [0u8; 32];
     content_key.copy_from_slice(&content_key_bytes);
     Ok(SyncContext {
-        server_url,
-        device_token,
+        server_url: creds.server_url,
+        device_token: creds.device_token,
         device_id,
         content_key,
     })
@@ -292,24 +265,5 @@ fn validate_password(pw: &str) -> Result<()> {
     if pw.len() < 8 {
         return Err(anyhow!("password must be at least 8 characters"));
     }
-    Ok(())
-}
-
-fn persist_credentials(
-    server_url: &str,
-    device_token: &str,
-    user_id: &str,
-    device_id: &str,
-    username: &str,
-    content_salt_b64: &str,
-    content_key_b64: &str,
-) -> Result<()> {
-    keychain::set(keychain::KEY_SERVER_URL, server_url)?;
-    keychain::set(keychain::KEY_DEVICE_TOKEN, device_token)?;
-    keychain::set(keychain::KEY_USER_ID, user_id)?;
-    keychain::set(keychain::KEY_DEVICE_ID, device_id)?;
-    keychain::set(keychain::KEY_USERNAME, username)?;
-    keychain::set(keychain::KEY_CONTENT_SALT_B64, content_salt_b64)?;
-    keychain::set(keychain::KEY_CONTENT_KEY_B64, content_key_b64)?;
     Ok(())
 }
