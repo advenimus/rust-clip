@@ -1,4 +1,5 @@
 mod admin;
+mod api;
 mod audit;
 mod bootstrap;
 mod config;
@@ -72,6 +73,7 @@ async fn main() -> Result<()> {
         .route("/healthz", get(healthz))
         .route("/static/app.css", get(serve_app_css))
         .nest("/admin", admin::router())
+        .nest("/api/v1", api::router())
         .with_state(state)
         .layer(session_layer)
         .layer(TraceLayer::new_for_http());

@@ -11,6 +11,8 @@ pub const EVENT_USER_CREATED: &str = "user_created";
 pub const EVENT_USER_DELETED: &str = "user_deleted";
 pub const EVENT_ENROLLMENT_TOKEN_ISSUED: &str = "enrollment_token_issued";
 pub const EVENT_DEVICE_REVOKED: &str = "device_revoked";
+pub const EVENT_DEVICE_REGISTERED: &str = "device_registered";
+pub const EVENT_DEVICE_LOGOUT: &str = "device_logout";
 
 pub struct AuditEntry<'a> {
     pub actor_user_id: Option<Uuid>,

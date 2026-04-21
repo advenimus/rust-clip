@@ -2,7 +2,7 @@
 
 Self-hosted universal clipboard sync. Text, images, and files, end-to-end encrypted, across Windows, macOS, and Linux.
 
-**Status:** Phase 1 in progress. Server + admin portal work (login, users, devices, audit log). Device enrollment, client, and clipboard sync come in Phases 2-5.
+**Status:** Phase 2 in progress. Server API + CLI client are live (enrollment, login, logout, status). Clipboard sync (WS) and Tauri tray UI come in Phases 3-6.
 
 ## Architecture at a glance
 
@@ -18,7 +18,22 @@ Desktop clients (Tauri) connect to the same container behind a reverse proxy (Ca
 
 - `crates/rustclip-shared`, shared types and primitives (no runtime deps).
 - `crates/rustclip-server`, the Axum server (admin + API + WS).
-- `crates/rustclip-client`, the Tauri desktop client (shell comes in Phase 2).
+- `crates/rustclip-client`, the desktop client (CLI today, Tauri shell in Phase 6).
+
+## Enrolling a device (Phase 2)
+
+```sh
+# On the admin side, create a user in the portal and copy its enrollment token.
+# Then on the target device:
+rustclip-client enroll --server-url http://localhost:8080
+# enter the enrollment token and choose a password when prompted
+
+rustclip-client status   # verifies the stored token against the server
+rustclip-client logout   # revokes the device and clears the keychain
+```
+
+Credentials are stored in the OS keychain (macOS Keychain, Windows Credential Manager,
+or the Linux Secret Service). Never in a dotfile.
 
 ## Running Phase 0
 

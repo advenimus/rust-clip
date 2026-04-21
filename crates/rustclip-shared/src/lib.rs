@@ -3,7 +3,13 @@
 //! Kept dependency-light so both sides depend on it without pulling in
 //! runtime-specific machinery (no tokio, no reqwest, no sqlx).
 
+pub mod rest;
+
 pub const PROTOCOL_VERSION: u32 = 1;
+
+pub const PLATFORM_WINDOWS: &str = "windows";
+pub const PLATFORM_MACOS: &str = "macos";
+pub const PLATFORM_LINUX: &str = "linux";
 
 #[cfg(test)]
 mod tests {
