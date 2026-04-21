@@ -20,6 +20,7 @@ pub enum SyncStatus {
 
 pub struct SyncRunner {
     handle: Mutex<Option<JoinHandle<()>>>,
+    watcher: Mutex<Option<JoinHandle<()>>>,
     status: Mutex<SyncStatus>,
 }
 
@@ -33,6 +34,7 @@ impl SyncRunner {
     pub fn new() -> Self {
         Self {
             handle: Mutex::new(None),
+            watcher: Mutex::new(None),
             status: Mutex::new(SyncStatus::Stopped),
         }
     }
@@ -70,6 +72,15 @@ impl SyncRunner {
             }
         });
         *guard = Some(task);
+        drop(guard);
+
+        // Side-car that tails the local history DB and fires OS
+        // notifications + `history-updated` Tauri events for each new
+        // incoming clip. Starts with sync, dies with it.
+        let mut watcher = self.watcher.lock().await;
+        if watcher.is_none() {
+            *watcher = Some(crate::history_watcher::spawn(app.clone()));
+        }
         Ok(())
     }
 
@@ -79,6 +90,11 @@ impl SyncRunner {
             task.abort();
         }
         drop(guard);
+        let mut watcher = self.watcher.lock().await;
+        if let Some(task) = watcher.take() {
+            task.abort();
+        }
+        drop(watcher);
         self.set_status(app, SyncStatus::Stopped).await;
         Ok(())
     }

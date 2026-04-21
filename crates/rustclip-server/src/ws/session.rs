@@ -54,6 +54,9 @@ use crate::{
 
 pub async fn run(socket: WebSocket, state: AppState, auth: DeviceAuth) {
     info!(user_id = %auth.user_id, device_id = %auth.device_id, "ws connected");
+    state
+        .metrics
+        .incr(&state.metrics.ws_connections_opened);
     let (mut writer, mut reader) = socket.split();
 
     // Subscribe first so no event is lost during the backlog drain window.
@@ -145,6 +148,9 @@ async fn handle_client_text(
         ClientMessage::ClipEvent(event) => {
             if !bucket.try_take() {
                 warn!(device_id = %auth.device_id, "ws clip event rate cap exceeded");
+                state
+                    .metrics
+                    .incr(&state.metrics.clip_events_rejected_rate_limited);
                 send_server(
                     writer,
                     &ServerMessage::Error {
@@ -157,6 +163,7 @@ async fn handle_client_text(
                 return Ok(());
             }
             persist_and_broadcast(state, auth, event.clone()).await?;
+            state.metrics.incr(&state.metrics.clip_events_accepted);
             send_server(writer, &ServerMessage::Ack { id: event.id })
                 .await
                 .ok();

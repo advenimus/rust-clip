@@ -13,6 +13,7 @@ use uuid::Uuid;
 
 use crate::{
     config::Config,
+    metrics::MetricsHub,
     rate_limit::RateLimiter,
     settings::{RuntimeSettings, SettingsStore},
     state::AppState,
@@ -45,6 +46,7 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
         settings,
         hub: Arc::new(Hub::new()),
         auth_limiter: RateLimiter::new(),
+        metrics: Arc::new(MetricsHub::new()),
     };
     let app = Router::new()
         .nest("/api/v1", crate::api::router(RateLimiter::new()))

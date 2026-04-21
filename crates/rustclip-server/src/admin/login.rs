@@ -66,6 +66,7 @@ pub async fn submit(
     });
 
     let Some(user_id) = matched else {
+        state.metrics.incr(&state.metrics.admin_login_failed);
         let _ = audit::record(
             &state.db,
             audit::AuditEntry {
@@ -89,6 +90,7 @@ pub async fn submit(
         .await
         .map_err(|e| AppError::Session(e.to_string()))?;
 
+    state.metrics.incr(&state.metrics.admin_login_success);
     audit::record(
         &state.db,
         audit::AuditEntry {

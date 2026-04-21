@@ -47,7 +47,7 @@ a:hover { color: var(--accent); }
   font-weight: 600;
   letter-spacing: -0.01em;
 }
-.brand-mark { color: var(--accent); font-family: var(--font-mono); }
+.brand-mark { width: 26px; height: 26px; display: block; object-fit: contain; }
 .nav-links { display: flex; gap: 20px; flex: 1; }
 .nav-links a { color: var(--text-muted); font-size: 13px; }
 .nav-links a:hover { color: var(--text); }
@@ -275,7 +275,7 @@ input:focus { border-color: var(--accent); }
   max-width: 90vw;
 }
 .login-brand { text-align: center; margin-bottom: 24px; }
-.login-brand .brand-mark { font-size: 24px; display: block; margin-bottom: 4px; }
+.login-brand .brand-mark { width: 56px; height: 56px; margin: 0 auto 8px; }
 .login-brand h1 { margin: 0; font-size: 22px; letter-spacing: -0.01em; font-weight: 600; }
 .login-brand .muted { margin: 4px 0 0; }
 .login-form { display: flex; flex-direction: column; gap: 16px; }

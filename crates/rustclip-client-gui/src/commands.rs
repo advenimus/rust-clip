@@ -10,7 +10,7 @@ use rustclip_client::gui_api::{
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt;
 
-use crate::AppState;
+use crate::{AppState, tray};
 
 fn map_err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
@@ -22,13 +22,35 @@ pub async fn cmd_status() -> Result<Option<AccountStatus>, String> {
 }
 
 #[tauri::command]
-pub async fn cmd_enroll(input: EnrollInput) -> Result<AccountStatus, String> {
-    enroll(input).await.map_err(map_err)
+pub async fn cmd_enroll(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    input: EnrollInput,
+) -> Result<AccountStatus, String> {
+    let status = enroll(input).await.map_err(map_err)?;
+    kick_off_sync(&app, &state).await;
+    Ok(status)
 }
 
 #[tauri::command]
-pub async fn cmd_login(input: LoginInput) -> Result<AccountStatus, String> {
-    login(input).await.map_err(map_err)
+pub async fn cmd_login(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    input: LoginInput,
+) -> Result<AccountStatus, String> {
+    let status = login(input).await.map_err(map_err)?;
+    kick_off_sync(&app, &state).await;
+    Ok(status)
+}
+
+async fn kick_off_sync(app: &AppHandle, state: &tauri::State<'_, AppState>) {
+    {
+        let inner = state.lock().await;
+        if let Err(e) = inner.sync.start(app.clone()).await {
+            tracing::warn!(error = %e, "auto-start of sync after enroll/login failed");
+        }
+    }
+    tray::refresh_menu(app).await;
 }
 
 #[tauri::command]
@@ -36,10 +58,12 @@ pub async fn cmd_logout(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let inner = state.lock().await;
-    let _ = inner.sync.stop(&app).await;
-    drop(inner);
+    {
+        let inner = state.lock().await;
+        let _ = inner.sync.stop(&app).await;
+    }
     logout().await.map_err(map_err)?;
+    tray::refresh_menu(&app).await;
     Ok(())
 }
 
@@ -48,10 +72,13 @@ pub async fn cmd_reset(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<(), String> {
-    let inner = state.lock().await;
-    let _ = inner.sync.stop(&app).await;
-    drop(inner);
-    reset().map_err(map_err)
+    {
+        let inner = state.lock().await;
+        let _ = inner.sync.stop(&app).await;
+    }
+    reset().map_err(map_err)?;
+    tray::refresh_menu(&app).await;
+    Ok(())
 }
 
 #[tauri::command]

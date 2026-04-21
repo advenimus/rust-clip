@@ -5,6 +5,7 @@ mod bootstrap;
 mod config;
 mod db;
 mod error;
+mod metrics;
 mod middleware;
 mod models;
 mod password;
@@ -37,7 +38,8 @@ use tracing::{info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::{
-    config::Config, rate_limit::RateLimiter, settings::SettingsStore, state::AppState, ws::hub::Hub,
+    config::Config, metrics::MetricsHub, rate_limit::RateLimiter, settings::SettingsStore,
+    state::AppState, ws::hub::Hub,
 };
 
 #[tokio::main]
@@ -86,6 +88,7 @@ async fn main() -> Result<()> {
         settings,
         hub: Arc::new(Hub::new()),
         auth_limiter,
+        metrics: Arc::new(MetricsHub::new()),
     };
 
     let admin_router = admin::router(state.auth_limiter.clone())
@@ -114,8 +117,10 @@ async fn main() -> Result<()> {
     let pool_for_shutdown = state.db.clone();
     let app = Router::new()
         .route("/healthz", get(healthz))
+        .route("/metrics", get(metrics::metrics_handler))
         .route("/static/app.css", get(serve_app_css))
         .route("/static/admin.js", get(serve_admin_js))
+        .route("/static/logo.png", get(serve_logo_png))
         .nest("/admin", admin_router)
         .nest("/api/v1", api_router)
         .nest("/ws", ws::router())
@@ -177,6 +182,7 @@ async fn healthz() -> impl IntoResponse {
 
 const APP_CSS: &str = include_str!("../static/app.css");
 const ADMIN_JS: &str = include_str!("../static/admin.js");
+const LOGO_PNG: &[u8] = include_bytes!("../static/logo.png");
 
 async fn serve_app_css() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS)
@@ -186,6 +192,16 @@ async fn serve_admin_js() -> impl IntoResponse {
     (
         [(header::CONTENT_TYPE, "application/javascript; charset=utf-8")],
         ADMIN_JS,
+    )
+}
+
+async fn serve_logo_png() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LOGO_PNG,
     )
 }
 

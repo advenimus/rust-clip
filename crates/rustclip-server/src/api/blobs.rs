@@ -146,6 +146,7 @@ async fn upload(
         sha = %sha_hex,
         "blob uploaded"
     );
+    state.metrics.incr(&state.metrics.blob_uploads);
 
     Ok(Json(BlobUploadResponse {
         blob_id,
@@ -191,6 +192,7 @@ async fn download(
 
     let stream = ReaderStream::new(file);
     let body = Body::from_stream(stream);
+    state.metrics.incr(&state.metrics.blob_downloads);
     Ok((StatusCode::OK, headers, body).into_response())
 }
 
