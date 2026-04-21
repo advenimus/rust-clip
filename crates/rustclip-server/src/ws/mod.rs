@@ -5,6 +5,9 @@ use crate::{api::device_auth::DeviceAuth, state::AppState, ws::session::run};
 pub mod hub;
 pub mod session;
 
+#[cfg(test)]
+mod sync_test;
+
 pub fn router() -> Router<AppState> {
     Router::new().route("/", any(ws_upgrade))
 }
