@@ -32,5 +32,15 @@ argon2.workspace = true
 chacha20poly1305.workspace = true
 arboard.workspace = true
 png.workspace = true
+tar.workspace = true
+dirs.workspace = true
 tokio-tungstenite.workspace = true
 url.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true }
+objc2-app-kit = { workspace = true }
+
+[dev-dependencies]
+tempfile.workspace = true

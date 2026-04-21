@@ -6,6 +6,8 @@ pub mod hub;
 pub mod session;
 
 #[cfg(test)]
+mod bundle_test;
+#[cfg(test)]
 mod sync_test;
 
 pub fn router() -> Router<AppState> {

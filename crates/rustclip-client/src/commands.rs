@@ -6,7 +6,9 @@ use rand::{RngCore, rngs::OsRng};
 use rustclip_shared::rest::{EnrollRequest, LoginRequest};
 use uuid::Uuid;
 
-use crate::{crypto, http::ServerClient, keychain, sync};
+use std::path::PathBuf;
+
+use crate::{crypto, files, http::ServerClient, keychain, sync};
 
 const CONTENT_SALT_BYTES: usize = 32;
 
@@ -180,6 +182,37 @@ pub async fn logout() -> Result<()> {
 pub fn reset() -> Result<()> {
     keychain::clear_all()?;
     println!("cleared local keychain entries.");
+    Ok(())
+}
+
+pub async fn send_files(paths: Vec<PathBuf>) -> Result<()> {
+    let server_url = keychain::get(keychain::KEY_SERVER_URL)?
+        .ok_or_else(|| anyhow!("not enrolled; run `enroll` or `login` first"))?;
+    let device_token = keychain::get(keychain::KEY_DEVICE_TOKEN)?
+        .ok_or_else(|| anyhow!("no device token stored"))?;
+    let content_key_b64 = keychain::get(keychain::KEY_CONTENT_KEY_B64)?
+        .ok_or_else(|| anyhow!("no content key stored; re-login to rebuild"))?;
+    let content_key_bytes = BASE64
+        .decode(content_key_b64.as_bytes())
+        .context("decoding content key from keychain")?;
+    if content_key_bytes.len() != crypto::CONTENT_KEY_BYTES {
+        return Err(anyhow!(
+            "content key must be {} bytes",
+            crypto::CONTENT_KEY_BYTES
+        ));
+    }
+    let mut content_key = [0u8; 32];
+    content_key.copy_from_slice(&content_key_bytes);
+
+    let bundle = files::pack(&paths)?;
+    println!(
+        "packed {} ({} bytes uncompressed)",
+        bundle.summary, bundle.total_bytes
+    );
+
+    let cipher = crypto::Cipher::new(&content_key);
+    sync::send_bundle_one_shot(&server_url, &device_token, &cipher, bundle).await?;
+    println!("sent.");
     Ok(())
 }
 

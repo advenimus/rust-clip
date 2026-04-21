@@ -1,6 +1,8 @@
 mod clipboard;
+mod clipboard_files;
 mod commands;
 mod crypto;
+mod files;
 mod http;
 mod image_codec;
 mod keychain;
@@ -45,6 +47,12 @@ enum Command {
     Reset,
     /// Run the clipboard sync daemon.
     Sync,
+    /// Send one or more files to all other devices linked to this account.
+    SendFiles {
+        /// Files to bundle and send.
+        #[arg(required = true)]
+        paths: Vec<std::path::PathBuf>,
+    },
 }
 
 #[tokio::main]
@@ -68,6 +76,7 @@ async fn main() -> Result<()> {
             Ok(())
         }
         Command::Sync => commands::sync_cmd().await,
+        Command::SendFiles { paths } => commands::send_files(paths).await,
     }
 }
 

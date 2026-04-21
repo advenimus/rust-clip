@@ -8,7 +8,10 @@ use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
 use rustclip_shared::{
     MAX_INLINE_CIPHERTEXT_BYTES, PROTOCOL_VERSION,
-    protocol::{ClientMessage, ClipEventMessage, ContentRef, MIME_PNG, MIME_TEXT, ServerMessage},
+    protocol::{
+        ClientMessage, ClipEventMessage, ContentRef, MIME_BUNDLE, MIME_PNG, MIME_TEXT,
+        ServerMessage,
+    },
 };
 use tokio::sync::mpsc;
 use tokio_tungstenite::tungstenite::{
@@ -20,7 +23,9 @@ use uuid::Uuid;
 
 use crate::{
     clipboard::{self, ClipEvent, ClipboardHandle},
+    clipboard_files,
     crypto::Cipher,
+    files::{self, FileBundle},
     http::ServerClient,
     image_codec,
 };
@@ -162,13 +167,96 @@ async fn build_outgoing(
         ClipEvent::Text(text) => {
             let (nonce, ciphertext) = cipher.encrypt(text.as_bytes())?;
             let plain_len = text.len() as i64;
-            Ok(build_event(ciphertext, nonce, MIME_TEXT, plain_len, rest, device_token).await?)
+            build_event(ciphertext, nonce, MIME_TEXT, plain_len, rest, device_token).await
         }
         ClipEvent::Image(image) => {
             let png_bytes = image_codec::encode_png(&image)?;
             let plain_len = png_bytes.len() as i64;
             let (nonce, ciphertext) = cipher.encrypt(&png_bytes)?;
-            Ok(build_event(ciphertext, nonce, MIME_PNG, plain_len, rest, device_token).await?)
+            build_event(ciphertext, nonce, MIME_PNG, plain_len, rest, device_token).await
+        }
+    }
+}
+
+/// Build and send a single clip event via a short-lived WS connection.
+/// Used by the `send-files` CLI command, which does not run a daemon.
+///
+/// The filename / summary stays inside the encrypted payload: the server
+/// only sees `application/x-rustclip-bundle` and the ciphertext length. The
+/// receiver recovers the original filenames from the tar headers after
+/// decryption.
+pub async fn send_bundle_one_shot(
+    server_url: &str,
+    device_token: &str,
+    cipher: &Cipher,
+    bundle: FileBundle,
+) -> Result<()> {
+    let rest = ServerClient::new(server_url)?;
+    let plain_len = bundle.tar_bytes.len() as i64;
+    let (nonce, ciphertext) = cipher.encrypt(&bundle.tar_bytes)?;
+    let event = build_event(
+        ciphertext,
+        nonce,
+        MIME_BUNDLE,
+        plain_len,
+        &rest,
+        device_token,
+    )
+    .await?;
+
+    let ws_url = http_to_ws(server_url)?;
+    let mut request = ws_url
+        .as_str()
+        .into_client_request()
+        .context("building ws request")?;
+    let bearer = HeaderValue::from_str(&format!("Bearer {device_token}"))
+        .context("invalid device token for header")?;
+    request.headers_mut().insert("authorization", bearer);
+    let (stream, _resp) = tokio_tungstenite::connect_async(request)
+        .await
+        .context("ws connect for one-shot")?;
+    let (mut writer, mut reader) = stream.split();
+
+    let wire = serde_json::to_string(&ClientMessage::ClipEvent(event.clone()))?;
+    writer
+        .send(Message::Text(wire.into()))
+        .await
+        .context("sending clip_event")?;
+
+    // Wait up to a few seconds for the server Ack, then disconnect.
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return Err(anyhow!("timed out waiting for server ack"));
+        }
+        match tokio::time::timeout(remaining, reader.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                if let Ok(msg) = serde_json::from_str::<ServerMessage>(&text) {
+                    match msg {
+                        ServerMessage::Ack { id } if id == event.id => {
+                            let _ = writer
+                                .send(Message::Close(Some(CloseFrame {
+                                    code: tokio_tungstenite::tungstenite::protocol::frame::coding::CloseCode::Normal,
+                                    reason: "sent".into(),
+                                })))
+                                .await;
+                            return Ok(());
+                        }
+                        ServerMessage::Error { code, message } => {
+                            return Err(anyhow!("server error {code}: {message}"));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Ok(Some(Ok(Message::Ping(_) | Message::Pong(_)))) => {}
+            Ok(Some(Ok(Message::Close(_))) | None) => {
+                return Err(anyhow!("server closed connection before ack"));
+            }
+            Ok(Some(Err(e))) => return Err(anyhow!("ws read: {e}")),
+            Err(_) => return Err(anyhow!("timed out waiting for server ack")),
+            _ => {}
         }
     }
 }
@@ -277,7 +365,8 @@ async fn apply_incoming(
     };
     let plaintext = cipher.decrypt(&nonce, &ciphertext)?;
 
-    match event.mime_hint.as_str() {
+    let mime_base = event.mime_hint.split(';').next().unwrap_or("").trim();
+    match mime_base {
         m if m.starts_with("text/") => {
             let text = String::from_utf8(plaintext)
                 .map_err(|_| anyhow!("decrypted payload is not utf-8"))?;
@@ -297,6 +386,24 @@ async fn apply_incoming(
                 "received image clip"
             );
             clipboard.write_image(image)?;
+        }
+        MIME_BUNDLE => {
+            let dest = files::inbox_dir().join(event.id.to_string());
+            let written = files::unpack(&plaintext, &dest)?;
+            info!(
+                count = written.len(),
+                path = %dest.display(),
+                event_id = %event.id,
+                "received file bundle"
+            );
+            for p in &written {
+                info!(file = %p.display(), "inbox file");
+            }
+            if let Err(e) = clipboard_files::write_file_list(&written) {
+                // Non-fatal: files are already on disk, user can still copy
+                // them manually if the pasteboard write failed.
+                warn!(error = %e, "pasteboard file-list write failed");
+            }
         }
         other => {
             warn!(mime = %other, "unsupported mime, dropping");
