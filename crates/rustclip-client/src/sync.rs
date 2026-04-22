@@ -254,7 +254,19 @@ async fn build_outgoing(
                     );
                     return Ok(None);
                 }
-                Err(PackError::Other(e)) => return Err(e.context("packing file bundle")),
+                Err(PackError::Other(e)) => {
+                    // Pasteboard junk (e.g. a file URL pointing at `/`
+                    // or a path that isn't stat-able) would otherwise
+                    // kill the whole WS session. Log the specific error
+                    // and skip this event — the next genuine copy will
+                    // recover on its own.
+                    warn!(
+                        paths = path_count,
+                        error = %e,
+                        "skipping unpackable file bundle",
+                    );
+                    return Ok(None);
+                }
             };
             let summary = bundle.summary.clone();
             let plain_len = bundle.tar_bytes.len() as i64;
