@@ -247,6 +247,7 @@ pub fn history_item_text(entry_id: &str) -> Result<Option<String>> {
 pub struct ClientConfigView {
     pub auto_sync_files: bool,
     pub auto_sync_max_bytes: u64,
+    pub notifications_enabled: bool,
 }
 
 impl From<ClientConfig> for ClientConfigView {
@@ -254,6 +255,7 @@ impl From<ClientConfig> for ClientConfigView {
         Self {
             auto_sync_files: c.auto_sync_files,
             auto_sync_max_bytes: c.auto_sync_max_bytes,
+            notifications_enabled: c.notifications_enabled,
         }
     }
 }
@@ -263,6 +265,7 @@ impl From<ClientConfigView> for ClientConfig {
         Self {
             auto_sync_files: v.auto_sync_files,
             auto_sync_max_bytes: v.auto_sync_max_bytes,
+            notifications_enabled: v.notifications_enabled,
         }
     }
 }

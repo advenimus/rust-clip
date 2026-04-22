@@ -56,14 +56,29 @@ fn latest_incoming_id() -> Option<String> {
 
 fn notify_and_emit(app: &AppHandle, item: &HistoryEntryView) {
     let _ = app.emit("history-updated", ());
+    if !notifications_enabled() {
+        return;
+    }
     let (title, body) = match item.kind.as_str() {
-        "text" => ("New clipboard item".to_string(), trim(&item.preview, 140)),
+        "text" => ("New clipboard item".to_string(), trim(&item.preview, 80)),
         "image" => ("New clipboard image".to_string(), item.preview.clone()),
         "bundle" => ("New files synced".to_string(), item.preview.clone()),
         other => (format!("New clip ({other})"), item.preview.clone()),
     };
     if let Err(e) = app.notification().builder().title(title).body(body).show() {
         warn!(error = %e, "showing incoming-clip notification failed");
+    }
+}
+
+/// Reads the per-device config. Fails open (returns true) on error so a
+/// transient disk issue doesn't silently eat notifications.
+fn notifications_enabled() -> bool {
+    match rustclip_client::gui_api::get_client_config() {
+        Ok(cfg) => cfg.notifications_enabled,
+        Err(e) => {
+            debug!(error = %e, "reading client config failed; defaulting to notifications enabled");
+            true
+        }
     }
 }
 

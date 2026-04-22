@@ -31,6 +31,11 @@ pub struct ClientConfig {
     /// the explicit `send-files` CLI.
     #[serde(default = "default_auto_sync_max_bytes")]
     pub auto_sync_max_bytes: u64,
+    /// If true, the GUI shows an OS toast when a new clipboard item
+    /// arrives from another device. The History window refreshes
+    /// regardless.
+    #[serde(default = "default_notifications_enabled")]
+    pub notifications_enabled: bool,
 }
 
 fn default_auto_sync_files() -> bool {
@@ -39,12 +44,16 @@ fn default_auto_sync_files() -> bool {
 fn default_auto_sync_max_bytes() -> u64 {
     DEFAULT_AUTO_BUNDLE_CAP_BYTES
 }
+fn default_notifications_enabled() -> bool {
+    true
+}
 
 impl Default for ClientConfig {
     fn default() -> Self {
         Self {
             auto_sync_files: default_auto_sync_files(),
             auto_sync_max_bytes: default_auto_sync_max_bytes(),
+            notifications_enabled: default_notifications_enabled(),
         }
     }
 }
@@ -94,6 +103,7 @@ mod tests {
         let cfg = ClientConfig::load_from(&dir.path().join("nope.toml")).unwrap();
         assert!(cfg.auto_sync_files);
         assert_eq!(cfg.auto_sync_max_bytes, DEFAULT_AUTO_BUNDLE_CAP_BYTES);
+        assert!(cfg.notifications_enabled);
     }
 
     #[test]
@@ -103,11 +113,13 @@ mod tests {
         let cfg = ClientConfig {
             auto_sync_files: false,
             auto_sync_max_bytes: 42,
+            notifications_enabled: false,
         };
         cfg.save_to(&path).unwrap();
         let loaded = ClientConfig::load_from(&path).unwrap();
         assert!(!loaded.auto_sync_files);
         assert_eq!(loaded.auto_sync_max_bytes, 42);
+        assert!(!loaded.notifications_enabled);
     }
 
     #[test]
@@ -118,5 +130,6 @@ mod tests {
         let loaded = ClientConfig::load_from(&path).unwrap();
         assert!(!loaded.auto_sync_files);
         assert_eq!(loaded.auto_sync_max_bytes, DEFAULT_AUTO_BUNDLE_CAP_BYTES);
+        assert!(loaded.notifications_enabled);
     }
 }
