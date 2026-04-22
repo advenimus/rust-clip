@@ -536,10 +536,12 @@ async fn apply_incoming(
             for p in &written {
                 info!(file = %p.display(), "inbox file");
             }
-            // Route through the clipboard worker so the watcher's
-            // echo-suppression state moves in lockstep with the
-            // pasteboard write.
-            if let Err(e) = clipboard.write_file_list(written.clone()) {
+            // Put only the top-level inbox entries on the clipboard. For
+            // a single-file bundle that's just the file; for a folder
+            // bundle it's the folder itself, so Explorer / Finder's
+            // Ctrl+V recurses and preserves the directory structure.
+            let top_level = files::top_level_entries(&dest).unwrap_or_else(|_| written.clone());
+            if let Err(e) = clipboard.write_file_list(top_level) {
                 warn!(error = %e, "requesting file-list write failed");
             }
             let summary = summarize_incoming_bundle(&written);

@@ -266,6 +266,21 @@ fn safe_entry_name(raw: &Path) -> Result<PathBuf> {
     Ok(raw.to_path_buf())
 }
 
+/// List the immediate children of `dir` — files and directories at the
+/// top level only. Used by the receive path to feed the OS pasteboard
+/// with whole-folder entries rather than every leaf file, so that a
+/// subsequent Ctrl+V / Cmd+V preserves the packed directory structure
+/// instead of flattening it.
+pub fn top_level_entries(dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir).with_context(|| format!("reading {}", dir.display()))? {
+        let entry = entry.with_context(|| format!("entry in {}", dir.display()))?;
+        out.push(entry.path());
+    }
+    out.sort();
+    Ok(out)
+}
+
 /// Return a directory the client can use to drop incoming file payloads.
 /// Falls back to a temp-dir subpath if platform-specific data dirs are
 /// unavailable.
