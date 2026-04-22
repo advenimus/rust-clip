@@ -105,7 +105,11 @@ pub fn build_aad(event: &ClipEventMessage) -> Vec<u8> {
     let mut aad = Vec::with_capacity(128);
     aad.extend_from_slice(b"rustclip.v2\0");
     aad.extend_from_slice(event.id.as_bytes());
-    let source = event.source_device_id.as_ref().map(|u| *u.as_bytes()).unwrap_or([0u8; 16]);
+    let source = event
+        .source_device_id
+        .as_ref()
+        .map(|u| *u.as_bytes())
+        .unwrap_or([0u8; 16]);
     aad.extend_from_slice(&source);
     let mime = event.mime_hint.as_bytes();
     aad.extend_from_slice(&(mime.len() as u32).to_le_bytes());

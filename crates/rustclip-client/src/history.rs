@@ -119,10 +119,7 @@ impl History {
 
     pub fn open(path: &Path) -> Result<Self> {
         let conn = open_connection(path)?;
-        Ok(Self {
-            conn,
-            cipher: None,
-        })
+        Ok(Self { conn, cipher: None })
     }
 
     pub fn open_with_key(path: &Path, content_key: &[u8; 32]) -> Result<Self> {
@@ -309,8 +306,8 @@ impl History {
 }
 
 fn open_connection(path: &Path) -> Result<Connection> {
-    let conn = Connection::open(path)
-        .with_context(|| format!("opening history db {}", path.display()))?;
+    let conn =
+        Connection::open(path).with_context(|| format!("opening history db {}", path.display()))?;
     conn.pragma_update(None, "journal_mode", "WAL")
         .context("setting WAL journal mode")?;
     conn.pragma_update(None, "foreign_keys", true)

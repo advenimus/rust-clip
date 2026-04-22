@@ -65,8 +65,7 @@ pub async fn submit(
     // bucket — an attacker who eventually guesses right still paid the
     // cost, and legitimate typo-retries are cheap (5-capacity).
     let username_key = format!("admin_login_user:{}", form.username.to_lowercase());
-    let username_allowed =
-        admin_login_username_allowed(&state.auth_limiter, &username_key).await;
+    let username_allowed = admin_login_username_allowed(&state.auth_limiter, &username_key).await;
 
     let row = sqlx::query_as::<_, LoginRow>(
         "SELECT id, password_hash, is_admin, disabled_at FROM users WHERE username = ?",

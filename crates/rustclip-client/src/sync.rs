@@ -11,7 +11,6 @@ use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
-use zeroize::Zeroizing;
 use rustclip_shared::{
     MAX_INLINE_CIPHERTEXT_BYTES, PROTOCOL_VERSION,
     protocol::{
@@ -26,6 +25,7 @@ use tokio_tungstenite::tungstenite::{
 use tracing::{debug, info, warn};
 use url::Url;
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 use crate::{
     clipboard::{self, ClipEvent, ClipboardHandle},
@@ -573,10 +573,7 @@ async fn apply_incoming(
             let actual = hex::encode(Sha256::digest(&ct));
             if !sha256_eq(&actual, sha256_hex) {
                 return Err(anyhow!(
-                    "blob {} hash mismatch (event wanted {}, disk has {})",
-                    blob_id,
-                    sha256_hex,
-                    actual
+                    "blob {blob_id} hash mismatch (event wanted {sha256_hex}, disk has {actual})"
                 ));
             }
             let nn = BASE64

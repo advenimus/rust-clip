@@ -259,16 +259,13 @@ pub fn unpack(tar_bytes: &[u8], dest: &Path) -> Result<Vec<PathBuf>> {
         let declared = entry.header().size().unwrap_or(0);
         if declared > UNPACK_MAX_ENTRY_BYTES {
             return Err(anyhow!(
-                "tar entry {} declares {} bytes (> {} cap)",
-                dest_path.display(),
-                declared,
-                UNPACK_MAX_ENTRY_BYTES
+                "tar entry {} declares {declared} bytes (> {UNPACK_MAX_ENTRY_BYTES} cap)",
+                dest_path.display()
             ));
         }
         if total_written.saturating_add(declared) > UNPACK_MAX_TOTAL_BYTES {
             return Err(anyhow!(
-                "tar bundle total exceeds {} bytes",
-                UNPACK_MAX_TOTAL_BYTES
+                "tar bundle total exceeds {UNPACK_MAX_TOTAL_BYTES} bytes"
             ));
         }
         let mut file = fs::File::create(&dest_path)
@@ -278,9 +275,8 @@ pub fn unpack(tar_bytes: &[u8], dest: &Path) -> Result<Vec<PathBuf>> {
         let remaining_total = UNPACK_MAX_TOTAL_BYTES.saturating_sub(total_written);
         let entry_cap = UNPACK_MAX_ENTRY_BYTES.min(remaining_total);
         let mut limited = (&mut entry).take(entry_cap.saturating_add(1));
-        let copied = std::io::copy(&mut limited, &mut file).with_context(|| {
-            format!("writing entry body for {}", dest_path.display())
-        })?;
+        let copied = std::io::copy(&mut limited, &mut file)
+            .with_context(|| format!("writing entry body for {}", dest_path.display()))?;
         if copied > entry_cap {
             return Err(anyhow!(
                 "tar entry {} exceeded per-entry cap of {} bytes",

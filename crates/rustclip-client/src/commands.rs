@@ -252,8 +252,8 @@ pub fn clear_history() -> Result<()> {
 /// 32 bytes. Used by history / send-files paths that need to talk to
 /// the preview cipher but don't otherwise run the sync loop.
 fn load_content_key_from_keychain() -> Result<[u8; 32]> {
-    let creds = keychain::load()?
-        .ok_or_else(|| anyhow!("not enrolled; run `enroll` or `login` first"))?;
+    let creds =
+        keychain::load()?.ok_or_else(|| anyhow!("not enrolled; run `enroll` or `login` first"))?;
     let bytes = BASE64
         .decode(creds.content_key_b64.as_bytes())
         .context("decoding content key from keychain")?;

@@ -47,7 +47,13 @@ impl Cipher {
         let nonce = XChaCha20Poly1305::generate_nonce(&mut AeadOsRng);
         let ciphertext = self
             .aead
-            .encrypt(&nonce, Payload { msg: plaintext, aad })
+            .encrypt(
+                &nonce,
+                Payload {
+                    msg: plaintext,
+                    aad,
+                },
+            )
             .map_err(|_| anyhow!("encryption failed"))?;
         Ok((nonce.to_vec(), ciphertext))
     }
@@ -58,7 +64,13 @@ impl Cipher {
         }
         let nonce = XNonce::from_slice(nonce);
         self.aead
-            .decrypt(nonce, Payload { msg: ciphertext, aad })
+            .decrypt(
+                nonce,
+                Payload {
+                    msg: ciphertext,
+                    aad,
+                },
+            )
             .map_err(|_| anyhow!("decryption failed (wrong key, wrong aad, or tampered payload)"))
     }
 }

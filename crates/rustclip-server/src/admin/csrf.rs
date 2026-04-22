@@ -79,11 +79,7 @@ impl std::error::Error for SessionError {}
 /// admin login form (POST /admin/login) is also validated — the
 /// session cookie is created on first GET of `/admin/login` and the
 /// token is embedded in the rendered form.
-pub async fn csrf_layer(
-    State(_state): State<AppState>,
-    req: Request,
-    next: Next,
-) -> Response {
+pub async fn csrf_layer(State(_state): State<AppState>, req: Request, next: Next) -> Response {
     let method = req.method();
     if matches!(
         method,

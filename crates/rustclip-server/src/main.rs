@@ -120,8 +120,7 @@ async fn main() -> Result<()> {
     // body is buffered, so oversized admin-form / auth-API posts are rejected
     // at the network edge, not after the sqlx-layer parses them.
     const SMALL_BODY_LIMIT: usize = 1024 * 1024;
-    let api_router =
-        api::router(state.clone()).layer(DefaultBodyLimit::max(SMALL_BODY_LIMIT));
+    let api_router = api::router(state.clone()).layer(DefaultBodyLimit::max(SMALL_BODY_LIMIT));
 
     let pool_for_shutdown = state.db.clone();
     let app = Router::new()
@@ -131,7 +130,10 @@ async fn main() -> Result<()> {
         .route("/static/admin.js", get(serve_admin_js))
         .route("/static/logo.png", get(serve_logo_png))
         .route("/static/logo-light.png", get(serve_logo_light_png))
-        .nest("/admin", admin_router.layer(DefaultBodyLimit::max(SMALL_BODY_LIMIT)))
+        .nest(
+            "/admin",
+            admin_router.layer(DefaultBodyLimit::max(SMALL_BODY_LIMIT)),
+        )
         .nest("/api/v1", api_router)
         .nest("/ws", ws::router())
         .with_state(state)
