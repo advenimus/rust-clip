@@ -41,6 +41,15 @@ pub struct LoginResponse {
     pub content_salt_b64: String,
 }
 
+/// Response from `POST /api/v1/auth/refresh`. The server has rotated
+/// the device token hash and extended the TTL; the client must replace
+/// its stored token with `device_token` and carry on.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RefreshResponse {
+    pub device_token: String,
+    pub expires_at: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DeviceInfo {
     pub device_id: Uuid,

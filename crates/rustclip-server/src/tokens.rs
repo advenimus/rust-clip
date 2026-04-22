@@ -6,6 +6,11 @@ use subtle::ConstantTimeEq;
 
 pub const TOKEN_BYTES: usize = 32;
 
+/// Default TTL applied to device tokens at enrollment / login / refresh.
+/// A compromised token is no longer a lifetime liability; clients are
+/// expected to rotate via `POST /api/v1/auth/refresh` before expiry.
+pub const DEVICE_TOKEN_TTL_DAYS: i64 = 90;
+
 /// A freshly generated opaque token plus the server-side hash to persist.
 pub struct GeneratedToken {
     pub plaintext: String,

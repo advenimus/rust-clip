@@ -13,9 +13,10 @@ use std::{
 
 use axum::{
     extract::State,
-    http::{StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::IntoResponse,
 };
+use subtle::ConstantTimeEq;
 
 use crate::state::AppState;
 
@@ -44,7 +45,24 @@ impl MetricsHub {
     }
 }
 
-pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse {
+pub async fn metrics_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> impl IntoResponse {
+    if let Some(expected) = state.config.metrics_token.as_deref() {
+        let provided = headers
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.strip_prefix("Bearer "))
+            .unwrap_or("");
+        if !ct_eq(provided.as_bytes(), expected.as_bytes()) {
+            return (
+                StatusCode::UNAUTHORIZED,
+                [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+                String::from("unauthorized\n"),
+            );
+        }
+    }
     let body = render(&state).await.unwrap_or_else(|e| {
         tracing::warn!(error = %e, "metrics render failed");
         format!("# metrics render failed: {e}\n")
@@ -54,6 +72,14 @@ pub async fn metrics_handler(State(state): State<AppState>) -> impl IntoResponse
         [(header::CONTENT_TYPE, "text/plain; version=0.0.4")],
         body,
     )
+}
+
+fn ct_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        let _ = a.ct_eq(&b[..a.len().min(b.len())]);
+        return false;
+    }
+    a.ct_eq(b).into()
 }
 
 async fn render(state: &AppState) -> anyhow::Result<String> {

@@ -13,6 +13,7 @@ pub const EVENT_ENROLLMENT_TOKEN_ISSUED: &str = "enrollment_token_issued";
 pub const EVENT_DEVICE_REVOKED: &str = "device_revoked";
 pub const EVENT_DEVICE_REGISTERED: &str = "device_registered";
 pub const EVENT_DEVICE_LOGOUT: &str = "device_logout";
+pub const EVENT_DEVICE_TOKEN_REFRESHED: &str = "device_token_refreshed";
 pub const EVENT_USER_PASSWORD_RESET: &str = "user_password_reset";
 
 pub struct AuditEntry<'a> {

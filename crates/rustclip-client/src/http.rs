@@ -4,7 +4,7 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::{Client, StatusCode};
 use rustclip_shared::rest::{
     BlobUploadResponse, EnrollRequest, EnrollResponse, ErrorResponse, LoginRequest, LoginResponse,
-    MeResponse,
+    MeResponse, RefreshResponse,
 };
 use std::time::Duration;
 use uuid::Uuid;
@@ -42,6 +42,15 @@ impl ServerClient {
     pub async fn me(&self, token: &str) -> Result<MeResponse> {
         let url = format!("{}/api/v1/me", self.base_url);
         let resp = self.http.get(&url).bearer_auth(token).send().await?;
+        parse_json(resp).await
+    }
+
+    /// Rotate the device token and extend its TTL. The new plaintext
+    /// token comes back in the response and must replace the stored
+    /// one in the keychain.
+    pub async fn refresh(&self, token: &str) -> Result<RefreshResponse> {
+        let url = format!("{}/api/v1/auth/refresh", self.base_url);
+        let resp = self.http.post(&url).bearer_auth(token).send().await?;
         parse_json(resp).await
     }
 

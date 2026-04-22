@@ -21,6 +21,7 @@ pub fn router(state: AppState) -> Router<AppState> {
         .route("/auth/enroll", post(auth::enroll))
         .route("/auth/login", post(auth::login))
         .route("/auth/logout", post(auth::logout))
+        .route("/auth/refresh", post(auth::refresh))
         .layer(from_fn_with_state(state, rate_limit::auth_api_layer));
 
     Router::new()

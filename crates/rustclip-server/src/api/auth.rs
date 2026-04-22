@@ -1,6 +1,8 @@
 use axum::{Json, extract::State, http::HeaderMap};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
-use rustclip_shared::rest::{EnrollRequest, EnrollResponse, LoginRequest, LoginResponse};
+use rustclip_shared::rest::{
+    EnrollRequest, EnrollResponse, LoginRequest, LoginResponse, RefreshResponse,
+};
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -109,10 +111,11 @@ pub async fn enroll(
     .execute(&mut *tx)
     .await?;
 
+    let expires_at = now + (tokens::DEVICE_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
     sqlx::query(
         "INSERT INTO devices \
-         (id, user_id, device_name, platform, device_token_hash, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+         (id, user_id, device_name, platform, device_token_hash, created_at, expires_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(device_id)
     .bind(row.user_id)
@@ -120,6 +123,7 @@ pub async fn enroll(
     .bind(&req.platform)
     .bind(&device_token.hash)
     .bind(now)
+    .bind(expires_at)
     .execute(&mut *tx)
     .await?;
 
@@ -203,10 +207,11 @@ pub async fn login(
     let device_id = Uuid::new_v4();
     let now = now_millis();
 
+    let expires_at = now + (tokens::DEVICE_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
     sqlx::query(
         "INSERT INTO devices \
-         (id, user_id, device_name, platform, device_token_hash, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+         (id, user_id, device_name, platform, device_token_hash, created_at, expires_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(device_id)
     .bind(row.id)
@@ -214,6 +219,7 @@ pub async fn login(
     .bind(&req.platform)
     .bind(&device_token.hash)
     .bind(now)
+    .bind(expires_at)
     .execute(&state.db)
     .await?;
 
@@ -242,6 +248,46 @@ pub async fn login(
         username: row.username,
         display_name: row.display_name,
         content_salt_b64: BASE64.encode(&content_salt),
+    }))
+}
+
+pub async fn refresh(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    auth: DeviceAuth,
+) -> Result<Json<RefreshResponse>, ApiError> {
+    let now = now_millis();
+    let expires_at = now + (tokens::DEVICE_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000);
+    let new_token =
+        tokens::generate_token().map_err(|_| ApiError::internal("failed to generate token"))?;
+    sqlx::query(
+        "UPDATE devices SET device_token_hash = ?, expires_at = ?, last_seen_at = ? \
+         WHERE id = ?",
+    )
+    .bind(&new_token.hash)
+    .bind(expires_at)
+    .bind(now)
+    .bind(auth.device_id)
+    .execute(&state.db)
+    .await?;
+
+    let (ip, ua) = client_meta(&headers);
+    let _ = audit::record(
+        &state.db,
+        audit::AuditEntry {
+            actor_user_id: Some(auth.user_id),
+            actor_device_id: Some(auth.device_id),
+            event_type: audit::EVENT_DEVICE_TOKEN_REFRESHED,
+            ip_addr: ip.as_deref(),
+            user_agent: ua.as_deref(),
+        },
+        &serde_json::json!({ "expires_at": expires_at }),
+    )
+    .await;
+
+    Ok(Json(RefreshResponse {
+        device_token: new_token.plaintext,
+        expires_at,
     }))
 }
 

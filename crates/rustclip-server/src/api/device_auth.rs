@@ -50,26 +50,30 @@ impl FromRequestParts<AppState> for DeviceAuth {
         }
         let token_hash = hash_token(token);
 
+        let now = now_millis();
+        // M5: reject expired tokens. `expires_at` is NULL for devices
+        // enrolled before migration 0003; those still work until the
+        // next refresh rotates them onto a TTL.
         let row = sqlx::query_as::<_, DeviceAuthRow>(
             "SELECT d.id AS device_id, d.user_id, u.username, u.display_name, \
                     d.device_name, d.platform, d.created_at, d.last_seen_at \
              FROM devices d JOIN users u ON u.id = d.user_id \
              WHERE d.device_token_hash = ? \
                AND d.revoked_at IS NULL \
-               AND u.disabled_at IS NULL",
+               AND u.disabled_at IS NULL \
+               AND (d.expires_at IS NULL OR d.expires_at > ?)",
         )
         .bind(&token_hash)
+        .bind(now)
         .fetch_optional(&state.db)
         .await?
         .ok_or_else(|| {
             ApiError::new(
                 StatusCode::UNAUTHORIZED,
                 "invalid_token",
-                "token is invalid or revoked",
+                "token is invalid, revoked, or expired",
             )
         })?;
-
-        let now = now_millis();
         // Update last_seen best-effort; don't fail the request on a transient write error.
         if let Err(e) = sqlx::query("UPDATE devices SET last_seen_at = ? WHERE id = ?")
             .bind(now)
