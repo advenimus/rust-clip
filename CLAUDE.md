@@ -164,7 +164,6 @@ Current state: 57 tests passing (16 client + 38 server + 3 shared). CI runs the 
 ## Known deferrals (not in any phase)
 
 - OS clipboard-watcher file detection on the sending side (so copying files in Finder/Explorer auto-syncs them without using `send-files`).
-- Apple Developer ID signing + notarization in the release workflow. The plumbing is ready in `tauri-action`; needs repo secrets wired (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `CSC_LINK`, `CSC_KEY_PASSWORD`). Team ID `JBTB5G7DRQ` is reused from the user's other project (Conduit).
 - Windows code-signing (needs an EV or standard code-signing cert).
 - Docker Hub publishing — workflow is wired, waiting on `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` repo secrets. Without them, server image only lands on GHCR.
 - Intel Mac (x86_64-apple-darwin) builds. Deliberate non-goal — see "Design decisions".

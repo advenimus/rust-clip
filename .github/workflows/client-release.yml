@@ -63,6 +63,15 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # macOS signing + notarization. Variables are only set when the job
+          # runs on macOS; on Linux/Windows runners they're empty and the
+          # Tauri bundler skips the signing path.
+          APPLE_CERTIFICATE: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE || '' }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_CERTIFICATE_PASSWORD || '' }}
+          APPLE_SIGNING_IDENTITY: ${{ runner.os == 'macOS' && secrets.APPLE_SIGNING_IDENTITY || '' }}
+          APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
+          APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
+          APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
         with:
           projectPath: crates/rustclip-client-gui
           tagName: ${{ github.ref_name }}
@@ -70,9 +79,8 @@ jobs:
           releaseBody: |
             Desktop app for macOS, Windows, and Linux. CLI binary attached alongside.
 
-            macOS builds are **unsigned** — after downloading, run:
-              xattr -d com.apple.quarantine /Applications/RustClip.app
-            Windows SmartScreen may warn on first launch (More info → Run anyway).
+            macOS builds are Developer ID signed and notarized by Apple — the app launches cleanly on Gatekeeper.
+            Windows SmartScreen may still warn on first launch until we wire up code-signing on that side (More info → Run anyway).
           releaseDraft: false
           prerelease: false
           includeUpdaterJson: false
