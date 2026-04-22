@@ -70,6 +70,8 @@ pub struct UpdateForm {
     pub max_payload_bytes: String,
     pub offline_ttl_hours: String,
     pub audit_retention_days: String,
+    #[serde(default)]
+    pub update_check_enabled: Option<String>,
 }
 
 pub async fn update(
@@ -109,6 +111,7 @@ pub async fn update(
             "max_payload_bytes": new.max_payload_bytes,
             "offline_ttl_hours": new.offline_ttl_hours,
             "audit_retention_days": new.audit_retention_days,
+            "update_check_enabled": new.update_check_enabled,
         }),
     )
     .await?;
@@ -132,9 +135,13 @@ fn parse_form(form: &UpdateForm) -> Result<RuntimeSettings, String> {
         .trim()
         .parse::<u32>()
         .map_err(|_| "audit retention days must be a positive integer".to_string())?;
+    // HTML checkboxes are only sent in the form body when checked. Any present
+    // value counts as "on"; absence means the box was unchecked.
+    let update_check_enabled = form.update_check_enabled.is_some();
     Ok(RuntimeSettings {
         max_payload_bytes,
         offline_ttl_hours,
         audit_retention_days,
+        update_check_enabled,
     })
 }

@@ -34,6 +34,13 @@
       <input type="text" name="audit_retention_days" value="{{ current.audit_retention_days }}" />
       <span class="muted-note">Between {{ min_audit_retention_days }} and {{ max_audit_retention_days }}. Sweeper deletes audit rows older than this.</span>
     </label>
+    <label class="checkbox-row">
+      <input type="checkbox" name="update_check_enabled" value="on"{% if current.update_check_enabled %} checked{% endif %} />
+      <span>
+        Check for updates
+        <span class="muted-note">Polls github.com every 6 hours for new RustClip releases. Disable if you don't want the server reaching out to GitHub.</span>
+      </span>
+    </label>
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">Save</button>
     </div>

@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use crate::{
     config::Config, db::DbPool, metrics::MetricsHub, rate_limit::RateLimiter,
-    settings::SettingsStore, ws::hub::Hub,
+    settings::SettingsStore, update_check::UpdateState, ws::hub::Hub,
 };
 
 #[derive(Clone)]
@@ -13,4 +13,5 @@ pub struct AppState {
     pub hub: Arc<Hub>,
     pub auth_limiter: RateLimiter,
     pub metrics: Arc<MetricsHub>,
+    pub update_state: UpdateState,
 }

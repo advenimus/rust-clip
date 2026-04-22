@@ -18,6 +18,18 @@
 
   <div id="boot-error" class="boot-error hidden"></div>
 
+  <div id="update-banner" class="update-banner hidden" role="status">
+    <div class="update-banner-head">
+      <strong>Update available</strong>
+      <span id="update-banner-versions" class="muted"></span>
+    </div>
+    <div id="update-banner-actions" class="update-banner-actions">
+      <button id="update-install-btn" class="btn btn-primary">Install update</button>
+      <button id="update-later-btn" class="btn btn-ghost">Later</button>
+    </div>
+    <p id="update-banner-msg" class="status"></p>
+  </div>
+
   <main id="main">
     <section id="panel-account" class="panel">
       <div id="account-status"></div>
@@ -87,6 +99,10 @@
           <dt>Repository</dt><dd><a class="mono ext-link" data-ext="repo" id="about-repo" href="#">—</a></dd>
           <dt>License</dt><dd id="about-license">—</dd>
         </dl>
+        <div class="about-updates">
+          <button id="about-check-update" class="btn btn-ghost">Check for updates</button>
+          <span id="about-update-msg" class="muted"></span>
+        </div>
       </div>
 
       <div class="panel about-panel">

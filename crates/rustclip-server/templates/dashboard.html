@@ -6,6 +6,22 @@
   <p class="muted">Welcome back, {{ admin_display_name }}.</p>
 </section>
 
+{% match update_banner %}
+{% when Some with (banner) %}
+<section class="update-banner">
+  <div class="update-banner-head">
+    <strong>Update available: {{ banner.latest_version }}</strong>
+    <span class="muted">(current: v{{ banner.current_version }})</span>
+  </div>
+  <p class="muted-note">Run this on the Docker host to upgrade, or opt in to Watchtower for hands-off auto-update.</p>
+  <pre class="code-block"><code>{{ banner.upgrade_command }}</code></pre>
+  <div class="update-banner-actions">
+    <a class="btn btn-primary" href="{{ banner.release_url }}" target="_blank" rel="noopener noreferrer">View release notes ↗</a>
+    <a class="btn btn-ghost" href="/admin/about">Details</a>
+  </div>
+</section>
+{% when None %}{% endmatch %}
+
 <section class="stats">
   <a class="stat" href="/admin/users">
     <span class="stat-value">{{ user_count }}</span>

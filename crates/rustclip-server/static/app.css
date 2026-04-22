@@ -359,3 +359,44 @@ select:focus { border-color: var(--accent); }
 }
 .about-cta { display: flex; gap: 10px; flex-wrap: wrap; }
 .about-cta .btn { padding: 9px 16px; }
+
+.update-banner {
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  border-radius: 8px;
+  padding: 16px 20px;
+  margin-bottom: 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.update-banner-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.update-banner-head strong { color: var(--text); font-size: 15px; }
+.update-banner-actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 4px; }
+.code-block {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px 14px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  margin: 0;
+  overflow-x: auto;
+}
+.release-notes {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 12px 16px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12.5px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+  max-height: 420px;
+  overflow-y: auto;
+  color: var(--text-muted);
+}
+.update-card .panel-head h2 { color: var(--accent); }
+.checkbox-row { flex-direction: row !important; align-items: flex-start; gap: 10px; }
+.checkbox-row input[type="checkbox"] { margin-top: 3px; }
+.checkbox-row > span { display: flex; flex-direction: column; gap: 4px; }

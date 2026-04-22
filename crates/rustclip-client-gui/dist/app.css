@@ -181,3 +181,29 @@ input:focus { border-color: var(--accent); }
 .about-kv dd { margin: 0; color: var(--text); word-break: break-word; }
 .ext-link { color: var(--accent); cursor: pointer; }
 .ext-link:hover { text-decoration: underline; }
+
+.update-banner {
+  margin: 12px 18px 0;
+  padding: 14px 16px;
+  border: 1px solid var(--accent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.update-banner-head { display: flex; gap: 10px; align-items: baseline; flex-wrap: wrap; }
+.update-banner-head strong { color: var(--text); font-size: 14px; }
+.update-banner-actions { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+.update-banner-actions .muted-note { color: var(--text-muted); font-size: 12px; }
+.update-banner .status { margin: 0; font-size: 12px; }
+.update-banner .status.err { color: var(--danger); }
+
+.about-updates {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 18px 16px;
+  flex-wrap: wrap;
+}
+.about-updates .muted { color: var(--text-muted); font-size: 12px; }

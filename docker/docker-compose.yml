@@ -23,3 +23,26 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
+    # Allows the opt-in Watchtower service (below) to auto-update this container.
+    # Watchtower only touches containers with this label when started with
+    # WATCHTOWER_LABEL_ENABLE=true, so it won't interfere with other containers
+    # on the host.
+    labels:
+      - "com.centurylinklabs.watchtower.enable=true"
+
+  # Opt-in: `docker compose --profile autoupdate up -d` to run Watchtower
+  # alongside rustclip. Watchtower polls the registry hourly for a newer image
+  # and restarts the rustclip container when one ships. Leave this profile off
+  # if you prefer to upgrade manually (`docker compose pull && docker compose up -d`).
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: rustclip-watchtower
+    profiles: [autoupdate]
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_POLL_INTERVAL: "3600"
+      WATCHTOWER_NOTIFICATIONS_LEVEL: "info"

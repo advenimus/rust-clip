@@ -72,6 +72,13 @@ jobs:
           APPLE_ID: ${{ runner.os == 'macOS' && secrets.APPLE_ID || '' }}
           APPLE_PASSWORD: ${{ runner.os == 'macOS' && secrets.APPLE_PASSWORD || '' }}
           APPLE_TEAM_ID: ${{ runner.os == 'macOS' && secrets.APPLE_TEAM_ID || '' }}
+          # Tauri updater signing. Private key + password must be set as repo
+          # secrets; without them tauri-action falls back to unsigned bundles
+          # (which the updater plugin then refuses to apply). Keypair is
+          # generated once with `cargo tauri signer generate` — see
+          # docs/operator-guide.md for the one-time setup.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           projectPath: crates/rustclip-client-gui
           tagName: ${{ github.ref_name }}
@@ -83,7 +90,12 @@ jobs:
             Windows SmartScreen may still warn on first launch until we wire up code-signing on that side (More info → Run anyway).
           releaseDraft: false
           prerelease: false
-          includeUpdaterJson: false
+          # Only produce a signed `latest.json` when the signing secrets are
+          # wired up. Before the Tauri keypair is set up (see operator-guide),
+          # releases still ship as normal unsigned installers — they just
+          # don't activate auto-update. First release after setup will pick up
+          # in-app updates on subsequent releases.
+          includeUpdaterJson: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
           args: ${{ matrix.platform.tauri-args }}
 
       - name: Package CLI (Unix)

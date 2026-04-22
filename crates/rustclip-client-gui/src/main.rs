@@ -11,6 +11,7 @@ mod commands;
 mod history_watcher;
 mod sync_runner;
 mod tray;
+mod updater;
 
 use std::sync::Arc;
 
@@ -39,6 +40,7 @@ fn main() {
             MacosLauncher::LaunchAgent,
             None,
         ))
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(app_state.clone())
         .setup(move |app| {
             // Menu-bar-only on macOS: no dock tile, no application menu,
@@ -65,6 +67,15 @@ fn main() {
                 tray::refresh_menu(&handle).await;
             });
 
+            // Deferred update check — give the app a chance to finish booting
+            // before we reach out to the network. Fires an `update-available`
+            // event on the main window if a newer release is published.
+            let update_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+                updater::check_and_notify(&update_handle).await;
+            });
+
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -84,6 +95,9 @@ fn main() {
             commands::cmd_show_window,
             commands::cmd_about,
             commands::cmd_open_external,
+            commands::cmd_check_update,
+            commands::cmd_install_update,
+            commands::cmd_update_install_kind,
         ])
         .on_window_event(|window, event| {
             // Closing a UI window should hide it rather than quit the app;

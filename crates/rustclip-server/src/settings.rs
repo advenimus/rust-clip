@@ -18,8 +18,10 @@ use crate::{
 pub const KEY_MAX_PAYLOAD_BYTES: &str = "max_payload_bytes";
 pub const KEY_OFFLINE_TTL_HOURS: &str = "offline_ttl_hours";
 pub const KEY_AUDIT_RETENTION_DAYS: &str = "audit_retention_days";
+pub const KEY_UPDATE_CHECK_ENABLED: &str = "update_check_enabled";
 
 pub const DEFAULT_AUDIT_RETENTION_DAYS: u32 = 90;
+pub const DEFAULT_UPDATE_CHECK_ENABLED: bool = true;
 
 pub const MIN_OFFLINE_TTL_HOURS: u32 = 1;
 pub const MAX_OFFLINE_TTL_HOURS: u32 = 24 * 365;
@@ -33,6 +35,7 @@ pub struct RuntimeSettings {
     pub max_payload_bytes: u64,
     pub offline_ttl_hours: u32,
     pub audit_retention_days: u32,
+    pub update_check_enabled: bool,
 }
 
 impl RuntimeSettings {
@@ -41,6 +44,7 @@ impl RuntimeSettings {
             max_payload_bytes: config.max_payload_bytes,
             offline_ttl_hours: config.offline_ttl_hours,
             audit_retention_days: DEFAULT_AUDIT_RETENTION_DAYS,
+            update_check_enabled: DEFAULT_UPDATE_CHECK_ENABLED,
         }
     }
 }
@@ -54,10 +58,11 @@ impl SettingsStore {
     pub async fn load(pool: &DbPool, config: &Config) -> Result<Self> {
         let mut s = RuntimeSettings::from_config(config);
         let rows: Vec<(String, String)> =
-            sqlx::query_as("SELECT key, value FROM settings WHERE key IN (?, ?, ?)")
+            sqlx::query_as("SELECT key, value FROM settings WHERE key IN (?, ?, ?, ?)")
                 .bind(KEY_MAX_PAYLOAD_BYTES)
                 .bind(KEY_OFFLINE_TTL_HOURS)
                 .bind(KEY_AUDIT_RETENTION_DAYS)
+                .bind(KEY_UPDATE_CHECK_ENABLED)
                 .fetch_all(pool)
                 .await
                 .context("loading runtime settings")?;
@@ -76,6 +81,11 @@ impl SettingsStore {
                 KEY_AUDIT_RETENTION_DAYS => {
                     if let Ok(n) = v.parse::<u32>() {
                         s.audit_retention_days = n;
+                    }
+                }
+                KEY_UPDATE_CHECK_ENABLED => {
+                    if let Ok(b) = v.parse::<bool>() {
+                        s.update_check_enabled = b;
                     }
                 }
                 _ => {}
@@ -105,6 +115,10 @@ impl SettingsStore {
             (
                 KEY_AUDIT_RETENTION_DAYS,
                 new.audit_retention_days.to_string(),
+            ),
+            (
+                KEY_UPDATE_CHECK_ENABLED,
+                new.update_check_enabled.to_string(),
             ),
         ];
         let mut tx = pool.begin().await?;
@@ -172,6 +186,7 @@ mod tests {
         assert_eq!(snap.max_payload_bytes, 10 * 1024 * 1024);
         assert_eq!(snap.offline_ttl_hours, 24);
         assert_eq!(snap.audit_retention_days, DEFAULT_AUDIT_RETENTION_DAYS);
+        assert_eq!(snap.update_check_enabled, DEFAULT_UPDATE_CHECK_ENABLED);
     }
 
     #[tokio::test]
@@ -184,6 +199,7 @@ mod tests {
             max_payload_bytes: 50 * 1024 * 1024,
             offline_ttl_hours: 48,
             audit_retention_days: 30,
+            update_check_enabled: false,
         };
         store.update(&pool, new).await.unwrap();
 
@@ -201,6 +217,7 @@ mod tests {
                 max_payload_bytes: 0,
                 offline_ttl_hours: 24,
                 audit_retention_days: 30,
+                update_check_enabled: true,
             })
             .is_err()
         );
@@ -209,6 +226,7 @@ mod tests {
                 max_payload_bytes: 10 * 1024 * 1024,
                 offline_ttl_hours: 0,
                 audit_retention_days: 30,
+                update_check_enabled: true,
             })
             .is_err()
         );
@@ -217,6 +235,7 @@ mod tests {
                 max_payload_bytes: 10 * 1024 * 1024,
                 offline_ttl_hours: 24,
                 audit_retention_days: 0,
+                update_check_enabled: true,
             })
             .is_err()
         );
@@ -225,6 +244,7 @@ mod tests {
                 max_payload_bytes: 10 * 1024 * 1024,
                 offline_ttl_hours: 24,
                 audit_retention_days: 30,
+                update_check_enabled: true,
             })
             .is_ok()
         );

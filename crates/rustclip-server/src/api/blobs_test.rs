@@ -39,6 +39,7 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
         max_payload_bytes: 1024 * 1024,
         offline_ttl_hours: 24,
         audit_retention_days: 90,
+        update_check_enabled: false,
     });
     let state = AppState {
         db: pool,
@@ -47,6 +48,7 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
         hub: Arc::new(Hub::new()),
         auth_limiter: RateLimiter::new(),
         metrics: Arc::new(MetricsHub::new()),
+        update_state: crate::update_check::UpdateState::new(),
     };
     let app = Router::new()
         .nest("/api/v1", crate::api::router(RateLimiter::new()))

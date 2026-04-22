@@ -299,6 +299,98 @@
       if (!panelHistory.classList.contains('hidden')) refreshHistory();
     });
 
+    // ---- Update banner ----
+    const updateBanner = document.getElementById('update-banner');
+    const updateVersions = document.getElementById('update-banner-versions');
+    const updateActions = document.getElementById('update-banner-actions');
+    const updateMsg = document.getElementById('update-banner-msg');
+    const updateInstallBtn = document.getElementById('update-install-btn');
+    const updateLaterBtn = document.getElementById('update-later-btn');
+    let currentUpdate = null;
+
+    function showUpdateBanner(info) {
+      currentUpdate = info;
+      updateVersions.textContent = `v${info.current_version} → ${info.latest_version}`;
+      updateMsg.textContent = '';
+      updateMsg.className = 'status';
+      // Rebuild the action row based on install kind.
+      updateActions.innerHTML = '';
+      const selfUpdatable = ['dmg', 'msi', 'nsis', 'app_image'].includes(info.install_kind);
+      if (selfUpdatable) {
+        const btn = document.createElement('button');
+        btn.className = 'btn btn-primary';
+        btn.textContent = 'Install update';
+        btn.addEventListener('click', installUpdateHandler);
+        updateActions.appendChild(btn);
+      } else {
+        const link = document.createElement('button');
+        link.className = 'btn btn-primary';
+        const tip = info.install_kind === 'deb'
+          ? 'Update via your package manager (apt/dpkg) — installer replaces system-managed files.'
+          : info.install_kind === 'rpm'
+            ? 'Update via your package manager (dnf/rpm) — installer replaces system-managed files.'
+            : 'Open the release page to download the latest installer.';
+        link.textContent = 'Open release page ↗';
+        link.title = tip;
+        link.addEventListener('click', async () => {
+          try { await invoke('cmd_open_external', { url: info.release_url }); }
+          catch (err) { alert(String(err)); }
+        });
+        updateActions.appendChild(link);
+        const note = document.createElement('span');
+        note.className = 'muted-note';
+        note.textContent = tip;
+        updateActions.appendChild(note);
+      }
+      const later = document.createElement('button');
+      later.className = 'btn btn-ghost';
+      later.textContent = 'Later';
+      later.addEventListener('click', () => updateBanner.classList.add('hidden'));
+      updateActions.appendChild(later);
+
+      updateBanner.classList.remove('hidden');
+    }
+
+    async function installUpdateHandler() {
+      updateMsg.textContent = 'Downloading update…';
+      updateMsg.className = 'status';
+      try {
+        await invoke('cmd_install_update');
+        // Backend restarts the process on success; if we're still here the
+        // user likely cancelled the system prompt.
+      } catch (err) {
+        updateMsg.textContent = String(err);
+        updateMsg.className = 'status err';
+      }
+    }
+
+    updateInstallBtn && updateInstallBtn.addEventListener('click', installUpdateHandler);
+    updateLaterBtn && updateLaterBtn.addEventListener('click', () => {
+      updateBanner.classList.add('hidden');
+    });
+
+    listen('update-available', (evt) => {
+      if (evt.payload) showUpdateBanner(evt.payload);
+    });
+
+    // Manual "Check for updates" button on the About panel.
+    const aboutCheckBtn = document.getElementById('about-check-update');
+    const aboutUpdateMsg = document.getElementById('about-update-msg');
+    aboutCheckBtn && aboutCheckBtn.addEventListener('click', async () => {
+      aboutUpdateMsg.textContent = 'Checking…';
+      try {
+        const info = await invoke('cmd_check_update');
+        if (info) {
+          aboutUpdateMsg.textContent = `Update available: ${info.latest_version}`;
+          showUpdateBanner(info);
+        } else {
+          aboutUpdateMsg.textContent = "You're on the latest version.";
+        }
+      } catch (err) {
+        aboutUpdateMsg.textContent = 'Check failed: ' + String(err);
+      }
+    });
+
     pickPanelFromHash();
     window.addEventListener('hashchange', pickPanelFromHash);
   }

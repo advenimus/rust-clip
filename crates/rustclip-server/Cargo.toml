@@ -39,8 +39,9 @@ sha2.workspace = true
 hex.workspace = true
 subtle.workspace = true
 futures-util.workspace = true
+reqwest.workspace = true
+semver.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
-reqwest.workspace = true
 tokio-tungstenite.workspace = true

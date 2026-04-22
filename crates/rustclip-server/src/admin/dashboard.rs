@@ -6,7 +6,11 @@ use axum::{
 use sqlx::FromRow;
 use time::OffsetDateTime;
 
-use crate::{db::now_millis, error::AppResult, middleware::AdminUser, state::AppState};
+use crate::{
+    db::now_millis, error::AppResult, middleware::AdminUser, state::AppState, update_check,
+};
+
+const UPGRADE_COMMAND: &str = "docker compose pull && docker compose up -d";
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 const WEEK_MS: i64 = 7 * DAY_MS;
@@ -27,11 +31,19 @@ struct DashboardTemplate<'a> {
     clip_events_7d: i64,
     blob_storage_mb: String,
     recent_events: Vec<RecentEvent>,
+    update_banner: Option<UpdateBanner>,
 }
 
 pub struct RecentEvent {
     pub event_type: String,
     pub when: String,
+}
+
+pub struct UpdateBanner {
+    pub current_version: &'static str,
+    pub latest_version: String,
+    pub release_url: String,
+    pub upgrade_command: &'static str,
 }
 
 pub async fn show(State(state): State<AppState>, admin: AdminUser) -> AppResult<Response> {
@@ -72,6 +84,8 @@ pub async fn show(State(state): State<AppState>, admin: AdminUser) -> AppResult<
     })
     .collect();
 
+    let update_banner = build_update_banner(&state).await;
+
     let tmpl = DashboardTemplate {
         admin_display_name: &admin.display_name,
         user_count,
@@ -80,8 +94,27 @@ pub async fn show(State(state): State<AppState>, admin: AdminUser) -> AppResult<
         clip_events_7d,
         blob_storage_mb,
         recent_events: recent,
+        update_banner,
     };
     Ok(Html(tmpl.render()?).into_response())
+}
+
+async fn build_update_banner(state: &AppState) -> Option<UpdateBanner> {
+    let settings = state.settings.snapshot().await;
+    if !settings.update_check_enabled {
+        return None;
+    }
+    let latest = state.update_state.snapshot().await?;
+    let current = env!("CARGO_PKG_VERSION");
+    if !update_check::is_newer(current, &latest.tag_name) {
+        return None;
+    }
+    Some(UpdateBanner {
+        current_version: current,
+        latest_version: latest.tag_name,
+        release_url: latest.html_url,
+        upgrade_command: UPGRADE_COMMAND,
+    })
 }
 
 fn format_mb(bytes: i64) -> String {

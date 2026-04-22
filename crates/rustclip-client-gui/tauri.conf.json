@@ -17,6 +17,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
+    "createUpdaterArtifacts": true,
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -27,6 +28,25 @@
     "macOS": {
       "exceptionDomain": "",
       "frameworks": []
+    },
+    "windows": {
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "headerImage": "icons/installer-header.bmp",
+        "sidebarImage": "icons/installer-sidebar.bmp",
+        "installMode": "currentUser"
+      }
+    }
+  },
+  "plugins": {
+    "updater": {
+      "endpoints": [
+        "https://github.com/advenimus/rust-clip/releases/latest/download/latest.json"
+      ],
+      "pubkey": "REPLACE_ME_WITH_GENERATED_PUBKEY",
+      "windows": {
+        "installMode": "passive"
+      }
     }
   }
 }

@@ -16,6 +16,7 @@ mod sweeper;
 #[cfg(test)]
 mod test_util;
 mod tokens;
+mod update_check;
 mod ws;
 
 use std::{env, sync::Arc};
@@ -39,7 +40,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::{
     config::Config, metrics::MetricsHub, rate_limit::RateLimiter, settings::SettingsStore,
-    state::AppState, ws::hub::Hub,
+    state::AppState, update_check::UpdateState, ws::hub::Hub,
 };
 
 #[tokio::main]
@@ -77,6 +78,9 @@ async fn main() -> Result<()> {
 
     sweeper::spawn(pool.clone(), settings.clone());
 
+    let update_state = UpdateState::new();
+    update_check::spawn(update_state.clone(), settings.clone());
+
     let auth_limiter = RateLimiter::new();
     auth_limiter.clone().spawn_pruner(
         rate_limit::AUTH_API_LIMIT,
@@ -90,6 +94,7 @@ async fn main() -> Result<()> {
         hub: Arc::new(Hub::new()),
         auth_limiter,
         metrics: Arc::new(MetricsHub::new()),
+        update_state,
     };
 
     let admin_router = admin::router(state.auth_limiter.clone())
