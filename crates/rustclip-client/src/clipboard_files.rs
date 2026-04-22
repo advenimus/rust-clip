@@ -162,8 +162,12 @@ mod platform {
             std::ptr::write_bytes(ptr as *mut u8, 0, DROPFILES_SIZE);
             // DROPFILES.pFiles = sizeof(DROPFILES) (files follow immediately)
             *(ptr as *mut u32) = DROPFILES_SIZE as u32;
-            // DROPFILES.fWide = TRUE at offset 16
-            *((ptr as *mut u8).add(16) as *mut i32) = 1;
+            // DROPFILES.fWide = TRUE at offset 16. We write -1 (all bits set)
+            // instead of 1 to match .NET's Clipboard.SetFileDropList, which is
+            // what every other Windows app emits. Some shell reader code paths
+            // check fWide == TRUE with TRUE==-1 and fall through to the ANSI
+            // parser otherwise, producing a silently-empty FileDropList.
+            *((ptr as *mut u8).add(16) as *mut i32) = -1;
             let dst = (ptr as *mut u8).add(DROPFILES_SIZE) as *mut u16;
             std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
             let _ = GlobalUnlock(h);
