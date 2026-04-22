@@ -16,7 +16,7 @@ RUN cargo build --release -p rustclip-server
 FROM gcr.io/distroless/cc-debian12:nonroot AS runtime
 WORKDIR /app
 COPY --from=builder /app/target/release/rustclip-server /app/rustclip-server
-EXPOSE 8080
+EXPOSE 9123
 USER nonroot
 # Static assets and Askama templates are embedded into the binary.
 ENTRYPOINT ["/app/rustclip-server"]

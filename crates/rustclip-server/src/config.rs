@@ -2,7 +2,7 @@ use std::{env, net::SocketAddr, path::PathBuf};
 
 use anyhow::{Context, Result};
 
-pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:8080";
+pub const DEFAULT_BIND_ADDR: &str = "0.0.0.0:9123";
 pub const DEFAULT_DATA_DIR: &str = "/data";
 pub const DEFAULT_MAX_PAYLOAD_BYTES: u64 = 25 * 1024 * 1024;
 pub const DEFAULT_OFFLINE_TTL_HOURS: u32 = 24;

@@ -13,7 +13,8 @@ Environment variables consumed by the server:
 
 | Variable | Default | Purpose |
 | --- | --- | --- |
-| `RUSTCLIP_BIND_ADDR` | `0.0.0.0:8080` | Listen address. Override with caution; prefer putting a reverse proxy in front. |
+| `RUSTCLIP_BIND_ADDR` | `0.0.0.0:9123` | Listen address inside the server process. Override with caution; prefer putting a reverse proxy in front. |
+| `RUSTCLIP_HOST_PORT` | `9123` | Compose-only. Host-side port for the Docker port mapping (`127.0.0.1:${RUSTCLIP_HOST_PORT}:9123`). Change if 9123 is already bound on the host, or when running multiple instances. Has no effect outside `docker/docker-compose.yml`. |
 | `RUSTCLIP_DATA_DIR` | `/data` | Directory for `rustclip.db` and the `blobs/` subdirectory. Should be an encrypted volume. |
 | `RUSTCLIP_PUBLIC_URL` | `http://<bind_addr>` | Canonical URL shown in the admin portal. Set to `https://clip.example.com` when you wire up TLS. |
 | `RUSTCLIP_ADMIN_USERNAME` | (none) | Bootstrap admin account. Only used on first boot when the `users` table is empty. |

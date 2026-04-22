@@ -108,7 +108,7 @@ cp .env.example .env               # edit admin credentials + public URL
 docker compose -f docker/docker-compose.yml up -d
 ```
 
-Point your reverse proxy of choice (Caddy, Traefik, Nginx) at `http://container:8080`. Terminate TLS there — the server speaks plain HTTP on loopback.
+Point your reverse proxy of choice (Caddy, Traefik, Nginx) at `http://container:9123`. Terminate TLS there — the server speaks plain HTTP on loopback. (Host-side port is overridable via `RUSTCLIP_HOST_PORT`; the container always listens on `9123` internally.)
 
 ### Desktop client
 
@@ -172,7 +172,7 @@ RUSTCLIP_ADMIN_USERNAME=admin RUSTCLIP_ADMIN_PASSWORD=please-change-me \
 cargo run -p rustclip-client-gui
 
 # Run the CLI
-cargo run -p rustclip-client -- enroll --server-url http://127.0.0.1:8080
+cargo run -p rustclip-client -- enroll --server-url http://127.0.0.1:9123
 ```
 
 Checks:

@@ -7,11 +7,11 @@ services:
     container_name: rustclip
     restart: unless-stopped
     ports:
-      - "127.0.0.1:8080:8080"
+      - "127.0.0.1:${RUSTCLIP_HOST_PORT:-9123}:9123"
     environment:
       RUSTCLIP_ADMIN_USERNAME: ${RUSTCLIP_ADMIN_USERNAME:-admin}
       RUSTCLIP_ADMIN_PASSWORD: ${RUSTCLIP_ADMIN_PASSWORD:-please-change-me}
-      RUSTCLIP_PUBLIC_URL: ${RUSTCLIP_PUBLIC_URL:-http://localhost:8080}
+      RUSTCLIP_PUBLIC_URL: ${RUSTCLIP_PUBLIC_URL:-http://localhost:9123}
       RUSTCLIP_MAX_PAYLOAD_BYTES: ${RUSTCLIP_MAX_PAYLOAD_BYTES:-26214400}
       RUSTCLIP_OFFLINE_TTL_HOURS: ${RUSTCLIP_OFFLINE_TTL_HOURS:-24}
       RUSTCLIP_LOG_LEVEL: ${RUSTCLIP_LOG_LEVEL:-info}
