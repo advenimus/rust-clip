@@ -1,5 +1,15 @@
 name: Client release
 
+# Stable tags: v1.2.3 → release marked Latest, installers served to
+# every user via the updater endpoint
+# (https://github.com/advenimus/rust-clip/releases/latest/download/latest.json).
+#
+# Prerelease tags: anything with a hyphen in the SemVer, e.g.
+# v0.2.0-beta.1 → release marked Pre-release. GitHub's
+# /releases/latest endpoint automatically excludes prereleases, so
+# stable users are never prompted to install these. Beta testers
+# install manually from the release page.
+
 on:
   push:
     tags: ['v*']
@@ -82,14 +92,17 @@ jobs:
         with:
           projectPath: crates/rustclip-client-gui
           tagName: ${{ github.ref_name }}
-          releaseName: 'RustClip ${{ github.ref_name }}'
+          releaseName: ${{ contains(github.ref_name, '-') && format('RustClip {0} (Beta)', github.ref_name) || format('RustClip {0}', github.ref_name) }}
           releaseBody: |
             Desktop app for macOS, Windows, and Linux. CLI binary attached alongside.
 
             macOS builds are Developer ID signed and notarized by Apple — the app launches cleanly on Gatekeeper.
             Windows SmartScreen may still warn on first launch until we wire up code-signing on that side (More info → Run anyway).
           releaseDraft: false
-          prerelease: false
+          # Tags with a hyphen (v0.2.0-beta.1) land as GitHub Pre-releases;
+          # stable users on the auto-updater never see them because the
+          # /releases/latest endpoint skips prereleases.
+          prerelease: ${{ contains(github.ref_name, '-') }}
           # Only produce a signed `latest.json` when the signing secrets are
           # wired up. Before the Tauri keypair is set up (see operator-guide),
           # releases still ship as normal unsigned installers — they just
@@ -123,5 +136,9 @@ jobs:
             rustclip-cli-${{ github.ref_name }}-${{ matrix.platform.label }}.zip
           tag_name: ${{ github.ref_name }}
           draft: false
-          make_latest: "true"
+          # Mirror the prerelease flag tauri-action set when it created
+          # the release, so the CLI attach step doesn't accidentally
+          # promote a Beta to Latest.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
           fail_on_unmatched_files: false
