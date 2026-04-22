@@ -15,7 +15,7 @@ use rustclip_shared::{
     MAX_INLINE_CIPHERTEXT_BYTES, PROTOCOL_VERSION,
     protocol::{
         ClientMessage, ClipEventMessage, ContentRef, MIME_BUNDLE, MIME_PNG, MIME_TEXT,
-        ServerMessage, WS_SUBPROTOCOL,
+        ServerMessage, WS_SUBPROTOCOL, build_aad,
     },
 };
 use tokio::sync::mpsc;
@@ -148,7 +148,7 @@ async fn session(
                     return Ok(());
                 };
                 let Some((outgoing, preview)) =
-                    build_outgoing(cipher, rest, device_token, event).await?
+                    build_outgoing(cipher, rest, device_token, device_id, event).await?
                 else {
                     continue;
                 };
@@ -211,15 +211,21 @@ async fn build_outgoing(
     cipher: &Cipher,
     rest: &ServerClient,
     device_token: &str,
+    device_id: Uuid,
     event: ClipEvent,
 ) -> Result<Option<(ClipEventMessage, OutgoingPreview)>> {
     match event {
         ClipEvent::Text(text) => {
             info!(bytes = text.len(), "outgoing text clip");
-            let (nonce, ciphertext) = cipher.encrypt(text.as_bytes())?;
-            let plain_len = text.len() as i64;
-            let msg =
-                build_event(ciphertext, nonce, MIME_TEXT, plain_len, rest, device_token).await?;
+            let msg = encrypt_and_build_event(
+                cipher,
+                rest,
+                device_token,
+                device_id,
+                text.as_bytes(),
+                MIME_TEXT,
+            )
+            .await?;
             Ok(Some((msg, OutgoingPreview::Text(text))))
         }
         ClipEvent::Image(image) => {
@@ -229,12 +235,17 @@ async fn build_outgoing(
                 "outgoing image clip"
             );
             let png_bytes = image_codec::encode_png(&image)?;
-            let plain_len = png_bytes.len() as i64;
             let width = image.width;
             let height = image.height;
-            let (nonce, ciphertext) = cipher.encrypt(&png_bytes)?;
-            let msg =
-                build_event(ciphertext, nonce, MIME_PNG, plain_len, rest, device_token).await?;
+            let msg = encrypt_and_build_event(
+                cipher,
+                rest,
+                device_token,
+                device_id,
+                &png_bytes,
+                MIME_PNG,
+            )
+            .await?;
             Ok(Some((msg, OutgoingPreview::Image { width, height })))
         }
         ClipEvent::Files(paths) => {
@@ -277,20 +288,92 @@ async fn build_outgoing(
                 }
             };
             let summary = bundle.summary.clone();
-            let plain_len = bundle.tar_bytes.len() as i64;
-            let (nonce, ciphertext) = cipher.encrypt(&bundle.tar_bytes)?;
-            let msg = build_event(
-                ciphertext,
-                nonce,
-                MIME_BUNDLE,
-                plain_len,
+            let msg = encrypt_and_build_event(
+                cipher,
                 rest,
                 device_token,
+                device_id,
+                &bundle.tar_bytes,
+                MIME_BUNDLE,
             )
             .await?;
             Ok(Some((msg, OutgoingPreview::Bundle { summary })))
         }
     }
+}
+
+/// Build the full clip_event envelope, including AAD-bound AEAD.
+///
+/// Because the AAD references the event id and (for blob payloads)
+/// the blob id, both are pre-generated client-side so they can be
+/// bound *before* encryption. The blob id is then sent to the server
+/// via `X-Rustclip-Blob-Id` so the receiver's AAD matches.
+///
+/// `device_id` is the caller's own device id; it rides in AAD so a
+/// malicious server that rewrites `source_device_id` on broadcast
+/// fails Poly1305 at the receiver.
+async fn encrypt_and_build_event(
+    cipher: &Cipher,
+    rest: &ServerClient,
+    device_token: &str,
+    device_id: Uuid,
+    plaintext: &[u8],
+    mime: &str,
+) -> Result<ClipEventMessage> {
+    // +16 = Poly1305 tag that chacha20poly1305 appends.
+    let goes_blob = plaintext.len() + 16 > MAX_INLINE_CIPHERTEXT_BYTES;
+    let event_id = Uuid::new_v4();
+    let created_at = now_millis();
+    let plain_len = plaintext.len() as i64;
+
+    // Build the envelope with placeholder ciphertext/nonce so AAD is
+    // computed over exactly the fields the receiver will see on the
+    // wire. sha256_hex is excluded from AAD (see shared::build_aad).
+    let mut envelope = ClipEventMessage {
+        id: event_id,
+        v: PROTOCOL_VERSION,
+        source_device_id: Some(device_id),
+        content: if goes_blob {
+            ContentRef::Blob {
+                blob_id: Uuid::new_v4(),
+                nonce_b64: String::new(),
+                sha256_hex: String::new(),
+            }
+        } else {
+            ContentRef::Inline {
+                ciphertext_b64: String::new(),
+                nonce_b64: String::new(),
+            }
+        },
+        mime_hint: mime.into(),
+        size_bytes: plain_len,
+        created_at,
+    };
+
+    let aad = build_aad(&envelope);
+    let (nonce, ciphertext) = cipher.encrypt(plaintext, &aad)?;
+
+    envelope.content = match envelope.content {
+        ContentRef::Blob { blob_id, .. } => {
+            let upload = rest
+                .upload_blob(device_token, blob_id, ciphertext)
+                .await
+                .context("uploading blob ciphertext")?;
+            // upload.blob_id should echo what we sent; if the server
+            // returned a different id the subsequent AAD mismatch at
+            // the receiver would surface the tampering anyway.
+            ContentRef::Blob {
+                blob_id: upload.blob_id,
+                nonce_b64: BASE64.encode(&nonce),
+                sha256_hex: upload.sha256_hex,
+            }
+        }
+        ContentRef::Inline { .. } => ContentRef::Inline {
+            ciphertext_b64: BASE64.encode(&ciphertext),
+            nonce_b64: BASE64.encode(&nonce),
+        },
+    };
+    Ok(envelope)
 }
 
 fn record_outgoing(
@@ -326,19 +409,18 @@ fn record_outgoing(
 pub async fn send_bundle_one_shot(
     server_url: &str,
     device_token: &str,
+    device_id: Uuid,
     cipher: &Cipher,
     bundle: FileBundle,
 ) -> Result<Uuid> {
     let rest = ServerClient::new(server_url)?;
-    let plain_len = bundle.tar_bytes.len() as i64;
-    let (nonce, ciphertext) = cipher.encrypt(&bundle.tar_bytes)?;
-    let event = build_event(
-        ciphertext,
-        nonce,
-        MIME_BUNDLE,
-        plain_len,
+    let event = encrypt_and_build_event(
+        cipher,
         &rest,
         device_token,
+        device_id,
+        &bundle.tar_bytes,
+        MIME_BUNDLE,
     )
     .await?;
     let event_id = event.id;
@@ -351,6 +433,10 @@ pub async fn send_bundle_one_shot(
     let bearer = HeaderValue::from_str(&format!("Bearer {device_token}"))
         .context("invalid device token for header")?;
     request.headers_mut().insert("authorization", bearer);
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        HeaderValue::from_static(WS_SUBPROTOCOL),
+    );
     let (stream, _resp) = tokio_tungstenite::connect_async(request)
         .await
         .context("ws connect for one-shot")?;
@@ -400,41 +486,6 @@ pub async fn send_bundle_one_shot(
     }
 }
 
-async fn build_event(
-    ciphertext: Vec<u8>,
-    nonce: Vec<u8>,
-    mime: &str,
-    size_bytes: i64,
-    rest: &ServerClient,
-    device_token: &str,
-) -> Result<ClipEventMessage> {
-    let content = if ciphertext.len() <= MAX_INLINE_CIPHERTEXT_BYTES {
-        ContentRef::Inline {
-            ciphertext_b64: BASE64.encode(&ciphertext),
-            nonce_b64: BASE64.encode(&nonce),
-        }
-    } else {
-        let upload = rest
-            .upload_blob(device_token, ciphertext)
-            .await
-            .context("uploading blob ciphertext")?;
-        ContentRef::Blob {
-            blob_id: upload.blob_id,
-            nonce_b64: BASE64.encode(&nonce),
-            sha256_hex: upload.sha256_hex,
-        }
-    };
-    Ok(ClipEventMessage {
-        id: Uuid::new_v4(),
-        v: PROTOCOL_VERSION,
-        source_device_id: None,
-        content,
-        mime_hint: mime.into(),
-        size_bytes,
-        created_at: now_millis(),
-    })
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn handle_server(
     msg: ServerMessage,
@@ -481,7 +532,17 @@ async fn apply_incoming(
     clipboard: &ClipboardHandle,
     history: &Arc<Mutex<History>>,
 ) -> Result<()> {
-    let (ciphertext, nonce) = match event.content {
+    // Reject v1 events — they were encrypted without AAD and we do
+    // not want to run a decrypt path that bypasses authentication of
+    // envelope metadata. Any pre-upgrade buffered events simply age
+    // out of the server-side offline TTL window.
+    if event.v < PROTOCOL_VERSION {
+        return Err(anyhow!(
+            "dropping pre-v2 clip event {}: protocol upgrade requires re-enrollment for old buffered events",
+            event.id
+        ));
+    }
+    let (ciphertext, nonce) = match &event.content {
         ContentRef::Inline {
             ciphertext_b64,
             nonce_b64,
@@ -499,14 +560,14 @@ async fn apply_incoming(
             nonce_b64,
             sha256_hex,
         } => {
-            let ct = rest.download_blob(device_token, blob_id).await?;
+            let ct = rest.download_blob(device_token, *blob_id).await?;
             // Verify the blob matches the hash recorded in the event before
             // handing it to the AEAD. If the server (or something on disk)
             // swapped the backing file, we abort here instead of letting the
             // attacker probe decryption behavior for same-key ciphertexts.
             use sha2::{Digest, Sha256};
             let actual = hex::encode(Sha256::digest(&ct));
-            if !sha256_eq(&actual, &sha256_hex) {
+            if !sha256_eq(&actual, sha256_hex) {
                 return Err(anyhow!(
                     "blob {} hash mismatch (event wanted {}, disk has {})",
                     blob_id,
@@ -520,7 +581,11 @@ async fn apply_incoming(
             (ct, nn)
         }
     };
-    let plaintext = cipher.decrypt(&nonce, &ciphertext)?;
+    // AAD is computed over the envelope the server delivered. Any
+    // metadata tamper (relabeled mime, shifted timestamp, spoofed
+    // source device) will make the AEAD tag check fail here.
+    let aad = build_aad(&event);
+    let plaintext = cipher.decrypt(&nonce, &ciphertext, &aad)?;
 
     let mime_base = event.mime_hint.split(';').next().unwrap_or("").trim();
     match mime_base {

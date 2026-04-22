@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use argon2::{Algorithm, Argon2, Params, Version};
 use chacha20poly1305::{
     KeyInit, XChaCha20Poly1305, XNonce,
-    aead::{Aead, AeadCore, OsRng as AeadOsRng},
+    aead::{Aead, AeadCore, OsRng as AeadOsRng, Payload},
 };
 
 pub const CONTENT_KEY_BYTES: usize = 32;
@@ -40,23 +40,26 @@ impl Cipher {
         }
     }
 
-    pub fn encrypt(&self, plaintext: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
+    /// Encrypt `plaintext` with the given `aad` (authenticated but not
+    /// encrypted). Returns `(nonce, ciphertext_with_tag)`. The AAD is
+    /// required on decrypt; if it differs, Poly1305 rejects.
+    pub fn encrypt(&self, plaintext: &[u8], aad: &[u8]) -> Result<(Vec<u8>, Vec<u8>)> {
         let nonce = XChaCha20Poly1305::generate_nonce(&mut AeadOsRng);
         let ciphertext = self
             .aead
-            .encrypt(&nonce, plaintext)
+            .encrypt(&nonce, Payload { msg: plaintext, aad })
             .map_err(|_| anyhow!("encryption failed"))?;
         Ok((nonce.to_vec(), ciphertext))
     }
 
-    pub fn decrypt(&self, nonce: &[u8], ciphertext: &[u8]) -> Result<Vec<u8>> {
+    pub fn decrypt(&self, nonce: &[u8], ciphertext: &[u8], aad: &[u8]) -> Result<Vec<u8>> {
         if nonce.len() != NONCE_BYTES {
             return Err(anyhow!("nonce must be {NONCE_BYTES} bytes"));
         }
         let nonce = XNonce::from_slice(nonce);
         self.aead
-            .decrypt(nonce, ciphertext)
-            .map_err(|_| anyhow!("decryption failed (wrong key or tampered payload)"))
+            .decrypt(nonce, Payload { msg: ciphertext, aad })
+            .map_err(|_| anyhow!("decryption failed (wrong key, wrong aad, or tampered payload)"))
     }
 }
 
@@ -68,8 +71,8 @@ mod tests {
     fn encrypt_decrypt_roundtrip() {
         let key = [7u8; CONTENT_KEY_BYTES];
         let c = Cipher::new(&key);
-        let (nonce, ct) = c.encrypt(b"hello world").unwrap();
-        let pt = c.decrypt(&nonce, &ct).unwrap();
+        let (nonce, ct) = c.encrypt(b"hello world", b"aad").unwrap();
+        let pt = c.decrypt(&nonce, &ct, b"aad").unwrap();
         assert_eq!(pt, b"hello world");
     }
 
@@ -77,8 +80,17 @@ mod tests {
     fn decrypt_fails_with_wrong_key() {
         let k1 = [7u8; CONTENT_KEY_BYTES];
         let k2 = [8u8; CONTENT_KEY_BYTES];
-        let (nonce, ct) = Cipher::new(&k1).encrypt(b"secret").unwrap();
-        assert!(Cipher::new(&k2).decrypt(&nonce, &ct).is_err());
+        let (nonce, ct) = Cipher::new(&k1).encrypt(b"secret", b"aad").unwrap();
+        assert!(Cipher::new(&k2).decrypt(&nonce, &ct, b"aad").is_err());
+    }
+
+    #[test]
+    fn decrypt_fails_with_wrong_aad() {
+        let key = [7u8; CONTENT_KEY_BYTES];
+        let c = Cipher::new(&key);
+        let (nonce, ct) = c.encrypt(b"secret", b"original-aad").unwrap();
+        assert!(c.decrypt(&nonce, &ct, b"tampered-aad").is_err());
+        assert!(c.decrypt(&nonce, &ct, b"").is_err());
     }
 
     #[test]

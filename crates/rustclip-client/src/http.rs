@@ -55,9 +55,14 @@ impl ServerClient {
         Ok(())
     }
 
+    /// Upload an already-encrypted blob under a client-chosen id. Binding
+    /// the id client-side lets the outgoing clip_event AEAD include it
+    /// as AAD, so the server cannot swap `blob_id` in-flight to point
+    /// at a different blob owned by the same user.
     pub async fn upload_blob(
         &self,
         token: &str,
+        blob_id: Uuid,
         ciphertext: Vec<u8>,
     ) -> Result<BlobUploadResponse> {
         let url = format!("{}/api/v1/blobs", self.base_url);
@@ -66,6 +71,7 @@ impl ServerClient {
             .post(&url)
             .bearer_auth(token)
             .header("content-type", "application/octet-stream")
+            .header("x-rustclip-blob-id", blob_id.to_string())
             .body(ciphertext)
             .send()
             .await?;

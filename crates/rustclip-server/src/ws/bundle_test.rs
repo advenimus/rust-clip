@@ -177,7 +177,7 @@ async fn bundle_flows_blob_upload_then_ws_then_blob_download() {
     let event = ClipEventMessage {
         id: Uuid::new_v4(),
         v: PROTOCOL_VERSION,
-        source_device_id: None,
+        source_device_id: Some(device_a),
         content: ContentRef::Blob {
             blob_id: upload.blob_id,
             nonce_b64: "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0".into(),

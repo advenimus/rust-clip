@@ -80,9 +80,92 @@ pub const MIME_TEXT: &str = "text/plain; charset=utf-8";
 pub const MIME_PNG: &str = "image/png";
 pub const MIME_BUNDLE: &str = "application/x-rustclip-bundle";
 
+/// Build the AAD (additional authenticated data) that the AEAD binds
+/// alongside the ciphertext. Senders populate `source_device_id`
+/// with their own device id before encrypting so receivers can detect
+/// a server that's forging the origin of a replayed ciphertext.
+///
+/// Layout:
+/// - 12 bytes: `b"rustclip.v2\0"` (domain separator + version)
+/// - 16 bytes: event id (UUID)
+/// - 16 bytes: source device id (UUID), all zeros if absent
+/// - 4 bytes: LE `u32` mime_hint length
+/// - N bytes: mime_hint UTF-8
+/// - 8 bytes: LE `i64` size_bytes
+/// - 8 bytes: LE `i64` created_at
+/// - 1 byte: content tag (`0x01` inline, `0x02` blob)
+/// - 16 bytes: blob_id (blob-only)
+///
+/// `sha256_hex` for blobs is NOT in AAD — the client verifies it
+/// separately against the downloaded bytes (see C3). Including it
+/// would force the sender to encrypt-then-hash before knowing what
+/// to bind, and the AEAD already authenticates the ciphertext on
+/// the receiver side.
+pub fn build_aad(event: &ClipEventMessage) -> Vec<u8> {
+    let mut aad = Vec::with_capacity(128);
+    aad.extend_from_slice(b"rustclip.v2\0");
+    aad.extend_from_slice(event.id.as_bytes());
+    let source = event.source_device_id.as_ref().map(|u| *u.as_bytes()).unwrap_or([0u8; 16]);
+    aad.extend_from_slice(&source);
+    let mime = event.mime_hint.as_bytes();
+    aad.extend_from_slice(&(mime.len() as u32).to_le_bytes());
+    aad.extend_from_slice(mime);
+    aad.extend_from_slice(&event.size_bytes.to_le_bytes());
+    aad.extend_from_slice(&event.created_at.to_le_bytes());
+    match &event.content {
+        ContentRef::Inline { .. } => aad.push(0x01),
+        ContentRef::Blob { blob_id, .. } => {
+            aad.push(0x02);
+            aad.extend_from_slice(blob_id.as_bytes());
+        }
+    }
+    aad
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn aad_changes_when_any_metadata_field_is_touched() {
+        let base = ClipEventMessage {
+            id: Uuid::from_bytes([1u8; 16]),
+            v: PROTOCOL_VERSION,
+            source_device_id: Some(Uuid::from_bytes([2u8; 16])),
+            content: ContentRef::Inline {
+                ciphertext_b64: "c3dhcAo=".into(),
+                nonce_b64: "bm9uY2U=".into(),
+            },
+            mime_hint: MIME_TEXT.into(),
+            size_bytes: 42,
+            created_at: 1_700_000_000_000,
+        };
+        let aad0 = build_aad(&base);
+
+        let mut m = base.clone();
+        m.mime_hint = MIME_PNG.into();
+        assert_ne!(aad0, build_aad(&m), "mime flips must reflect in AAD");
+
+        let mut m = base.clone();
+        m.size_bytes = 43;
+        assert_ne!(aad0, build_aad(&m));
+
+        let mut m = base.clone();
+        m.created_at += 1;
+        assert_ne!(aad0, build_aad(&m));
+
+        let mut m = base.clone();
+        m.source_device_id = Some(Uuid::from_bytes([9u8; 16]));
+        assert_ne!(aad0, build_aad(&m));
+
+        let mut m = base.clone();
+        m.content = ContentRef::Blob {
+            blob_id: Uuid::from_bytes([3u8; 16]),
+            nonce_b64: "n".into(),
+            sha256_hex: "".into(),
+        };
+        assert_ne!(aad0, build_aad(&m), "inline vs blob tag differs");
+    }
 
     #[test]
     fn clip_event_roundtrip() {

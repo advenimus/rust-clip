@@ -181,6 +181,24 @@ async fn persist_and_broadcast(
     if event.mime_hint.trim().is_empty() {
         anyhow::bail!("mime_hint is required");
     }
+    // C2: the client MUST set `source_device_id` to its own id so the
+    // value is bound into the AEAD's AAD. If it's missing or doesn't
+    // match the authenticated device, the AAD at the receiver would
+    // fail anyway — reject up front with a clear error rather than
+    // silently letting decryption fail on every peer.
+    match event.source_device_id {
+        Some(claimed) if claimed == auth.device_id => {}
+        Some(claimed) => {
+            anyhow::bail!(
+                "source_device_id mismatch: claimed {} but authenticated as {}",
+                claimed,
+                auth.device_id
+            );
+        }
+        None => {
+            anyhow::bail!("source_device_id is required (v2 protocol binds it as AAD)");
+        }
+    }
 
     let (content_kind, inline_bytes, blob_id, nonce_bytes) = match &event.content {
         ContentRef::Inline {
@@ -273,6 +291,7 @@ struct BacklogRow {
     content_kind: String,
     inline_ciphertext: Option<Vec<u8>>,
     blob_id: Option<Uuid>,
+    blob_sha256: Option<String>,
     nonce: Vec<u8>,
     mime_hint: String,
     size_bytes: i64,
@@ -284,13 +303,18 @@ async fn drain_backlog(
     auth: &DeviceAuth,
     writer: &mut futures_util::stream::SplitSink<WebSocket, Message>,
 ) -> anyhow::Result<usize> {
+    // Left-join `blobs` so each blob clip_event carries its stored
+    // sha256 back to the receiver. Without this, v2 receivers can't
+    // reconstruct the blob-integrity check nor derive the correct
+    // inline-vs-blob AAD tag.
     let rows = sqlx::query_as::<_, BacklogRow>(
         "SELECT \
             ce.id AS event_id, ce.source_device_id, ce.content_kind, \
-            ce.inline_ciphertext, ce.blob_id, ce.nonce, \
+            ce.inline_ciphertext, ce.blob_id, b.sha256 AS blob_sha256, ce.nonce, \
             ce.mime_hint, ce.size_bytes, ce.created_at \
          FROM clip_deliveries cd \
          JOIN clip_events ce ON ce.id = cd.clip_event_id \
+         LEFT JOIN blobs b ON b.id = ce.blob_id \
          WHERE cd.target_device_id = ? AND cd.delivered_at IS NULL \
          ORDER BY ce.created_at ASC",
     )
@@ -311,7 +335,7 @@ async fn drain_backlog(
             "blob" => ContentRef::Blob {
                 blob_id: row.blob_id.unwrap_or_else(Uuid::nil),
                 nonce_b64: BASE64.encode(&row.nonce),
-                sha256_hex: String::new(),
+                sha256_hex: row.blob_sha256.unwrap_or_default(),
             },
             other => {
                 warn!(kind = %other, "unknown content_kind in backlog row, skipping");

@@ -6,7 +6,17 @@
 pub mod protocol;
 pub mod rest;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+/// Wire protocol version.
+///
+/// v2 (current): AEAD binds envelope metadata as AAD — `id`, a
+///   client-populated `source_device_id`, `mime_hint`, `size_bytes`,
+///   `created_at`, and the content-kind tag (plus `blob_id` for
+///   blob events). Tampering with any of those now fails Poly1305.
+///
+/// v1: no AAD binding. Ciphertexts produced under v1 cannot be
+///   decrypted by v2 clients; pre-upgrade buffered events age out
+///   naturally inside the offline-TTL window.
+pub const PROTOCOL_VERSION: u32 = 2;
 
 /// Maximum ciphertext size that may ride inline on a WS `clip_event`. Larger
 /// payloads must be uploaded via the blob REST endpoint and referenced by id.
@@ -21,7 +31,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn protocol_version_is_v1() {
-        assert_eq!(PROTOCOL_VERSION, 1);
+    fn protocol_version_is_v2() {
+        assert_eq!(PROTOCOL_VERSION, 2);
     }
 }

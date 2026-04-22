@@ -261,8 +261,15 @@ pub async fn send_files(paths: Vec<PathBuf>) -> Result<()> {
     let summary = bundle.summary.clone();
     let total_bytes = bundle.total_bytes as i64;
     let cipher = crypto::Cipher::new(&content_key);
-    let event_id =
-        sync::send_bundle_one_shot(&creds.server_url, &creds.device_token, &cipher, bundle).await?;
+    let device_id = uuid::Uuid::parse_str(&creds.device_id).context("parsing device id")?;
+    let event_id = sync::send_bundle_one_shot(
+        &creds.server_url,
+        &creds.device_token,
+        device_id,
+        &cipher,
+        bundle,
+    )
+    .await?;
 
     if let Ok(mut h) = History::open_default() {
         let _ = h.record_bundle(

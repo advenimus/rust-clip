@@ -155,11 +155,13 @@ async fn clip_event_round_trips_to_peer() {
         assert!(matches!(end, ServerMessage::BacklogEnd), "got {end:?}");
     }
 
-    // A sends a clip event.
+    // A sends a clip event. Under v2 the client must stamp its own
+    // device id into source_device_id so the server can verify the
+    // AAD-bound origin.
     let event = ClipEventMessage {
         id: Uuid::new_v4(),
         v: PROTOCOL_VERSION,
-        source_device_id: None,
+        source_device_id: Some(device_a),
         content: ContentRef::Inline {
             ciphertext_b64: "aGVsbG8=".into(), // not real ciphertext; server doesn't decrypt
             nonce_b64: "MTIzNDU2Nzg5MDEyMzQ1Njc4OTAxMjM0".into(),

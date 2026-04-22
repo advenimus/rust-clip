@@ -87,7 +87,16 @@ async fn upload(
             ApiError::internal("blob storage unavailable")
         })?;
 
-    let blob_id = Uuid::new_v4();
+    // Client may pick the UUID so that it can be bound into the
+    // clip_event AEAD as AAD before the upload completes. If the
+    // header is missing or invalid we fall back to a server-chosen
+    // id for back-compat; clients that care about the AAD binding
+    // will always send a good one.
+    let blob_id = headers
+        .get("x-rustclip-blob-id")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|s| Uuid::parse_str(s).ok())
+        .unwrap_or_else(Uuid::new_v4);
     let storage_path = blob_path(&state, blob_id);
 
     let mut stream = body.into_data_stream();
