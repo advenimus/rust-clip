@@ -9,7 +9,7 @@
 
 use std::{
     fs,
-    io::{Read, Write},
+    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -215,14 +215,36 @@ fn build_summary(paths: &[PathBuf], file_count: usize, total_bytes: u64) -> Stri
     }
 }
 
+/// Upper bound on any single extracted file (H5). Intentionally
+/// generous for photos/PDFs but well under the compressed-bomb
+/// expansion factor a same-key attacker could muster inside a 25 MiB
+/// encrypted envelope.
+pub const UNPACK_MAX_ENTRY_BYTES: u64 = 500 * 1024 * 1024;
+/// Total bytes written across all entries in one unpack.
+pub const UNPACK_MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
+/// Upper bound on entry count to prevent inode-exhaustion / metadata
+/// flood attacks.
+pub const UNPACK_MAX_ENTRIES: usize = 10_000;
+
 /// Unpack a tar bundle into `dest`, creating the directory if needed. Each
 /// entry is written with its declared relative name; any attempt to break
 /// out (`..`, absolute paths) is rejected.
+///
+/// Decompressed size is capped per-entry, in aggregate, and by entry
+/// count (see `UNPACK_MAX_*` constants). Crossing any cap aborts the
+/// unpack mid-extraction: the caller is responsible for cleaning up
+/// `dest` if partial output is undesirable.
 pub fn unpack(tar_bytes: &[u8], dest: &Path) -> Result<Vec<PathBuf>> {
     fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
     let mut archive = Archive::new(tar_bytes);
     let mut out = Vec::new();
+    let mut total_written: u64 = 0;
     for entry in archive.entries().context("reading tar entries")? {
+        if out.len() >= UNPACK_MAX_ENTRIES {
+            return Err(anyhow!(
+                "tar bundle has more than {UNPACK_MAX_ENTRIES} entries; refusing"
+            ));
+        }
         let mut entry = entry.context("tar entry")?;
         let raw_path = entry.path().context("entry path")?;
         let safe = safe_entry_name(&raw_path)?;
@@ -231,11 +253,42 @@ pub fn unpack(tar_bytes: &[u8], dest: &Path) -> Result<Vec<PathBuf>> {
             fs::create_dir_all(parent)
                 .with_context(|| format!("creating parent dir for {}", dest_path.display()))?;
         }
+        // Reject on the declared header size before we stream a byte
+        // — a malicious bundle could claim 0 then stream gigabytes,
+        // so we also enforce a hard cap on the actual bytes read.
+        let declared = entry.header().size().unwrap_or(0);
+        if declared > UNPACK_MAX_ENTRY_BYTES {
+            return Err(anyhow!(
+                "tar entry {} declares {} bytes (> {} cap)",
+                dest_path.display(),
+                declared,
+                UNPACK_MAX_ENTRY_BYTES
+            ));
+        }
+        if total_written.saturating_add(declared) > UNPACK_MAX_TOTAL_BYTES {
+            return Err(anyhow!(
+                "tar bundle total exceeds {} bytes",
+                UNPACK_MAX_TOTAL_BYTES
+            ));
+        }
         let mut file = fs::File::create(&dest_path)
             .with_context(|| format!("creating {}", dest_path.display()))?;
-        let mut buf = Vec::new();
-        entry.read_to_end(&mut buf).context("reading entry body")?;
-        file.write_all(&buf).context("writing entry body")?;
+        // Take-bounded copy: even if the tar header lies about the
+        // entry size, we cap at the per-entry maximum.
+        let remaining_total = UNPACK_MAX_TOTAL_BYTES.saturating_sub(total_written);
+        let entry_cap = UNPACK_MAX_ENTRY_BYTES.min(remaining_total);
+        let mut limited = (&mut entry).take(entry_cap.saturating_add(1));
+        let copied = std::io::copy(&mut limited, &mut file).with_context(|| {
+            format!("writing entry body for {}", dest_path.display())
+        })?;
+        if copied > entry_cap {
+            return Err(anyhow!(
+                "tar entry {} exceeded per-entry cap of {} bytes",
+                dest_path.display(),
+                entry_cap
+            ));
+        }
+        total_written = total_written.saturating_add(copied);
         out.push(dest_path);
     }
     Ok(out)
@@ -483,5 +536,52 @@ mod tests {
         let h1 = hash_path_list(&[a.clone()]);
         let h2 = hash_path_list(&[a, b]);
         assert_ne!(h1, h2);
+    }
+
+    fn build_tar_with_lied_header(declared: u64, actual_bytes: usize) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut builder = Builder::new(&mut buf);
+        let mut header = Header::new_gnu();
+        header.set_size(declared);
+        header.set_mode(0o644);
+        header.set_cksum();
+        // Feed `actual_bytes` into append_data; the header lies about
+        // the size but the actual stream is what the reader consumes.
+        let body = vec![0u8; actual_bytes];
+        builder
+            .append_data(&mut header, "payload.bin", body.as_slice())
+            .unwrap();
+        builder.finish().unwrap();
+        drop(builder);
+        buf
+    }
+
+    #[test]
+    fn unpack_rejects_entry_larger_than_per_entry_cap_declared() {
+        let tar = build_tar_with_lied_header(UNPACK_MAX_ENTRY_BYTES + 1, 1);
+        let dst = TempDir::new().unwrap();
+        let err = unpack(&tar, dst.path()).unwrap_err();
+        assert!(err.to_string().contains("cap"), "got: {err}");
+    }
+
+    #[test]
+    fn unpack_rejects_too_many_entries() {
+        let mut buf: Vec<u8> = Vec::new();
+        let mut builder = Builder::new(&mut buf);
+        for i in 0..=UNPACK_MAX_ENTRIES {
+            let mut header = Header::new_gnu();
+            header.set_size(1);
+            header.set_mode(0o644);
+            header.set_cksum();
+            let body = [0u8; 1];
+            builder
+                .append_data(&mut header, format!("f{i}.bin"), body.as_slice())
+                .unwrap();
+        }
+        builder.finish().unwrap();
+        drop(builder);
+        let dst = TempDir::new().unwrap();
+        let err = unpack(&buf, dst.path()).unwrap_err();
+        assert!(err.to_string().contains("entries"), "got: {err}");
     }
 }
