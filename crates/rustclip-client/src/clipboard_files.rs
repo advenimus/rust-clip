@@ -103,7 +103,10 @@ mod platform {
 
 #[cfg(target_os = "windows")]
 mod platform {
-    use std::{os::windows::ffi::OsStringExt, path::PathBuf};
+    use std::{
+        os::windows::ffi::{OsStrExt, OsStringExt},
+        path::PathBuf,
+    };
 
     use anyhow::{Result, anyhow};
     use windows::Win32::{
@@ -114,10 +117,13 @@ mod platform {
                 OpenClipboard, SetClipboardData,
             },
             Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
-            Ole::CF_HDROP,
         },
         UI::Shell::{DragQueryFileW, HDROP},
     };
+
+    // CF_HDROP = 15. Hard-coded to avoid pulling the Win32_System_Ole
+    // feature of the `windows` crate for a single integer constant.
+    const CF_HDROP: u32 = 15;
 
     struct ClipboardGuard;
     impl ClipboardGuard {
@@ -171,7 +177,7 @@ mod platform {
             let dst = (ptr as *mut u8).add(DROPFILES_SIZE) as *mut u16;
             std::ptr::copy_nonoverlapping(wide.as_ptr(), dst, wide.len());
             let _ = GlobalUnlock(h);
-            SetClipboardData(CF_HDROP.0 as u32, HANDLE(h.0 as *mut _))
+            SetClipboardData(CF_HDROP, HANDLE(h.0 as *mut _))
                 .map_err(|e| anyhow!("SetClipboardData: {e}"))?;
         }
         Ok(())
@@ -179,13 +185,13 @@ mod platform {
 
     pub fn read_file_list() -> Result<Option<Vec<PathBuf>>> {
         unsafe {
-            if !IsClipboardFormatAvailable(CF_HDROP.0 as u32).as_bool() {
+            if IsClipboardFormatAvailable(CF_HDROP).is_err() {
                 return Ok(None);
             }
         }
         let _guard = ClipboardGuard::open()?;
         unsafe {
-            let h = match GetClipboardData(CF_HDROP.0 as u32) {
+            let h = match GetClipboardData(CF_HDROP) {
                 Ok(h) => h,
                 Err(_) => return Ok(None),
             };
