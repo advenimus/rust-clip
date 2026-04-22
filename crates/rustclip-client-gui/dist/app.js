@@ -46,14 +46,17 @@
 
     const panelAccount = document.getElementById('panel-account');
     const panelHistory = document.getElementById('panel-history');
+    const panelAbout = document.getElementById('panel-about');
     const tabs = document.querySelectorAll('.tabs a');
 
     function showPanel(name) {
       panelAccount.classList.toggle('hidden', name !== 'account');
       panelHistory.classList.toggle('hidden', name !== 'history');
+      panelAbout.classList.toggle('hidden', name !== 'about');
       tabs.forEach((a) => a.classList.toggle('active', a.dataset.tab === name));
       if (name === 'account') refreshAccount();
       if (name === 'history') refreshHistory();
+      if (name === 'about') refreshAbout();
     }
 
     tabs.forEach((a) => {
@@ -245,6 +248,48 @@
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
       })[c]);
     }
+
+    // ---- About panel ----
+    let aboutCache = null;
+
+    async function refreshAbout() {
+      if (!aboutCache) {
+        try {
+          aboutCache = await invoke('cmd_about');
+        } catch (err) {
+          panelAbout.innerHTML = `<div class="history-empty">${escapeHtml(String(err))}</div>`;
+          return;
+        }
+      }
+      document.getElementById('about-version').textContent = 'v' + aboutCache.version;
+      const repoEl = document.getElementById('about-repo');
+      repoEl.textContent = aboutCache.repo_url;
+      repoEl.href = aboutCache.repo_url;
+      document.getElementById('about-license').textContent = aboutCache.license;
+      document.getElementById('about-author').textContent = aboutCache.author_name;
+      const handleEl = document.getElementById('about-author-handle');
+      handleEl.textContent = '@' + aboutCache.author_handle;
+      handleEl.href = aboutCache.author_url;
+    }
+
+    // Any element with a data-ext attribute opens an external URL via the
+    // opener plugin (Tauri's webview won't navigate to remote origins).
+    panelAbout.addEventListener('click', async (e) => {
+      const trigger = e.target.closest('[data-ext]');
+      if (!trigger) return;
+      e.preventDefault();
+      if (!aboutCache) {
+        try { aboutCache = await invoke('cmd_about'); } catch { return; }
+      }
+      const url = ({
+        repo: aboutCache.repo_url,
+        releases: aboutCache.repo_url + '/releases/latest',
+        author: aboutCache.author_url,
+      })[trigger.dataset.ext];
+      if (!url) return;
+      try { await invoke('cmd_open_external', { url }); }
+      catch (err) { alert(String(err)); }
+    });
 
     // ---- Backend events ----
     listen('sync-status', (evt) => {

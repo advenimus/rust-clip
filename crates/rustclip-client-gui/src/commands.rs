@@ -7,8 +7,10 @@ use rustclip_client::gui_api::{
     AccountStatus, EnrollInput, HistoryEntryView, LoginInput, clear_history, enroll, list_history,
     local_account, login, logout, reset,
 };
+use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_opener::OpenerExt;
 
 use crate::{AppState, tray};
 
@@ -137,8 +139,8 @@ pub async fn cmd_get_autostart(app: AppHandle) -> Result<bool, String> {
 }
 
 /// Opens (or focuses) one of the known windows. The webview URL uses
-/// `#account` / `#history` hashes so a single `index.html` renders the
-/// right panel.
+/// `#account` / `#history` / `#about` hashes so a single `index.html`
+/// renders the right panel.
 #[tauri::command]
 pub async fn cmd_show_window(app: AppHandle, name: String) -> Result<(), String> {
     open_or_focus(&app, &name).map_err(map_err)
@@ -148,6 +150,7 @@ pub fn open_or_focus(app: &AppHandle, name: &str) -> anyhow::Result<()> {
     let label = match name {
         "account" => "account",
         "history" => "history",
+        "about" => "about",
         other => anyhow::bail!("unknown window: {other}"),
     };
     if let Some(win) = app.get_webview_window(label) {
@@ -159,6 +162,7 @@ pub fn open_or_focus(app: &AppHandle, name: &str) -> anyhow::Result<()> {
     let title = match label {
         "account" => "RustClip · Account",
         "history" => "RustClip · History",
+        "about" => "RustClip · About",
         _ => "RustClip",
     };
     WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
@@ -169,4 +173,36 @@ pub fn open_or_focus(app: &AppHandle, name: &str) -> anyhow::Result<()> {
         .visible(true)
         .build()?;
     Ok(())
+}
+
+#[derive(Serialize)]
+pub struct AboutInfo {
+    pub version: &'static str,
+    pub repo_url: &'static str,
+    pub author_name: &'static str,
+    pub author_handle: &'static str,
+    pub author_url: &'static str,
+    pub license: &'static str,
+}
+
+#[tauri::command]
+pub async fn cmd_about() -> Result<AboutInfo, String> {
+    Ok(AboutInfo {
+        version: env!("CARGO_PKG_VERSION"),
+        repo_url: "https://github.com/advenimus/rust-clip",
+        author_name: "Chris Vautour",
+        author_handle: "advenimus",
+        author_url: "https://github.com/advenimus",
+        license: "MIT OR Apache-2.0",
+    })
+}
+
+/// Open an external URL in the user's default browser via the opener plugin.
+/// Used by About-panel links so webview navigation doesn't try to load them
+/// in-app.
+#[tauri::command]
+pub async fn cmd_open_external(app: AppHandle, url: String) -> Result<(), String> {
+    app.opener()
+        .open_url(url, None::<&str>)
+        .map_err(|e| e.to_string())
 }

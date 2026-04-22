@@ -82,6 +82,8 @@ fn main() {
             commands::cmd_set_autostart,
             commands::cmd_get_autostart,
             commands::cmd_show_window,
+            commands::cmd_about,
+            commands::cmd_open_external,
         ])
         .on_window_event(|window, event| {
             // Closing a UI window should hide it rather than quit the app;

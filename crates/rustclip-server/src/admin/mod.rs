@@ -6,6 +6,7 @@ use axum::{
 
 use crate::{rate_limit, state::AppState};
 
+pub mod about;
 pub mod audit_page;
 pub mod dashboard;
 pub mod devices;
@@ -37,4 +38,5 @@ pub fn router(auth_limiter: rate_limit::RateLimiter) -> Router<AppState> {
         .route("/audit-log", get(audit_page::list))
         .route("/audit-log.csv", get(audit_page::export_csv))
         .route("/settings", get(settings::show).post(settings::update))
+        .route("/about", get(about::show))
 }

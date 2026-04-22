@@ -1,0 +1,49 @@
+{% extends "layout.html" %}
+{% block title %}About · RustClip{% endblock %}
+{% block content %}
+<section class="page-heading">
+  <h1>About</h1>
+  <p class="muted">RustClip server · <span class="mono">v{{ version }}</span></p>
+</section>
+
+<section class="panel about-hero">
+  <img class="about-mark" src="/static/logo.png" alt="RustClip" />
+  <div class="about-copy">
+    <h2 class="about-title">RustClip</h2>
+    <p class="about-tagline">Self-hosted, end-to-end encrypted universal clipboard sync — pure Rust from the server to the desktop.</p>
+    <p class="about-lead">
+      Text, images, and files sync live across macOS, Windows, and Linux devices tied to the same account.
+      The server routes encrypted blobs and never sees plaintext: content keys are derived from the user's
+      password via Argon2id and every payload is sealed with XChaCha20-Poly1305 before it hits the wire.
+    </p>
+    <div class="about-cta">
+      <a class="btn btn-primary" href="{{ repo_url }}" target="_blank" rel="noopener noreferrer">View on GitHub ↗</a>
+      <a class="btn btn-ghost" href="{{ repo_url }}/releases/latest" target="_blank" rel="noopener noreferrer">Latest release</a>
+    </div>
+  </div>
+</section>
+
+<section class="panel">
+  <header class="panel-head"><h2>Project</h2></header>
+  <dl class="kv">
+    <dt>Version</dt>
+    <dd class="mono">{{ version }}</dd>
+    <dt>Repository</dt>
+    <dd><a href="{{ repo_url }}" target="_blank" rel="noopener noreferrer" class="mono">{{ repo_url }}</a></dd>
+    <dt>Stack</dt>
+    <dd class="mono">Rust · axum · SQLite (WAL) · Askama · tower-sessions · XChaCha20-Poly1305 · Argon2id</dd>
+    <dt>License</dt>
+    <dd>MIT OR Apache-2.0</dd>
+  </dl>
+</section>
+
+<section class="panel">
+  <header class="panel-head"><h2>Credits</h2></header>
+  <dl class="kv">
+    <dt>Designed &amp; built by</dt>
+    <dd>{{ author_name }} · <a href="https://github.com/{{ author_handle }}" target="_blank" rel="noopener noreferrer" class="mono">@{{ author_handle }}</a></dd>
+    <dt>Made with</dt>
+    <dd>☕ too much coffee and a strong opinion about what clipboard sync should look like.</dd>
+  </dl>
+</section>
+{% endblock %}

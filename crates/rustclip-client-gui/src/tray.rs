@@ -37,6 +37,7 @@ fn build_initial_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "open-account", "Account", true, None::<&str>)?,
             &MenuItem::with_id(app, "open-history", "History", true, None::<&str>)?,
+            &MenuItem::with_id(app, "open-about", "About RustClip", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "start-sync", "Start sync", true, None::<&str>)?,
             &MenuItem::with_id(app, "stop-sync", "Stop sync", true, None::<&str>)?,
@@ -116,6 +117,7 @@ async fn refresh_menu_inner(app: &AppHandle) -> Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "open-account", "Account…", true, None::<&str>)?,
             &MenuItem::with_id(app, "open-history", "History…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "open-about", "About RustClip", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(
                 app,
@@ -164,6 +166,7 @@ async fn dispatch(app: &AppHandle, id: &str) -> Result<()> {
     match id {
         "open-account" => open_or_focus(app, "account")?,
         "open-history" => open_or_focus(app, "history")?,
+        "open-about" => open_or_focus(app, "about")?,
         "start-sync" => {
             let state: tauri::State<'_, AppState> = app.state();
             let inner = state.lock().await;

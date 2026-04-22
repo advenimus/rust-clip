@@ -318,3 +318,44 @@ select {
 select:focus { border-color: var(--accent); }
 .confirm-inline { display: inline; margin-left: 8px; }
 .confirm-inline button { padding: 4px 10px; font-size: 12px; }
+
+/* About page hero */
+.about-hero {
+  display: flex;
+  gap: 28px;
+  align-items: flex-start;
+  padding: 28px 24px;
+  border-left: 3px solid var(--accent);
+  background: linear-gradient(180deg, rgba(255, 168, 102, 0.04), transparent 60%);
+}
+.about-mark {
+  width: 84px;
+  height: 84px;
+  flex-shrink: 0;
+  object-fit: contain;
+  filter: drop-shadow(0 6px 16px rgba(255, 168, 102, 0.2));
+}
+.about-copy { flex: 1; min-width: 0; }
+.about-title {
+  margin: 0 0 6px;
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--text);
+  text-transform: none;
+}
+.about-tagline {
+  margin: 0 0 12px;
+  color: var(--accent);
+  font-size: 14px;
+  font-weight: 500;
+}
+.about-lead {
+  margin: 0 0 20px;
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.65;
+  max-width: 68ch;
+}
+.about-cta { display: flex; gap: 10px; flex-wrap: wrap; }
+.about-cta .btn { padding: 9px 16px; }

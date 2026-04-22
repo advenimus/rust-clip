@@ -12,6 +12,7 @@
     <nav class="tabs">
       <a href="#account" data-tab="account">Account</a>
       <a href="#history" data-tab="history">History</a>
+      <a href="#about" data-tab="about">About</a>
     </nav>
   </header>
 
@@ -58,6 +59,49 @@
         </div>
       </div>
       <div id="history-list"></div>
+    </section>
+
+    <section id="panel-about" class="hidden">
+      <div class="about-hero">
+        <img class="about-mark" src="logo.png" alt="RustClip" />
+        <div class="about-copy">
+          <h1 class="about-title">RustClip</h1>
+          <p class="about-tagline">Self-hosted, end-to-end encrypted universal clipboard sync.</p>
+          <p class="about-lead">
+            Text, images, and files sync live across your macOS, Windows, and Linux devices.
+            Only encrypted ciphertext ever leaves your computer — content keys are derived
+            from your password locally and every payload is sealed with XChaCha20-Poly1305
+            before it hits the wire. The server routes blobs; it never sees them.
+          </p>
+          <div class="about-cta">
+            <button class="btn btn-primary" data-ext="repo">View on GitHub ↗</button>
+            <button class="btn btn-ghost" data-ext="releases">Latest release</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel about-panel">
+        <div class="panel-head"><h2>Project</h2></div>
+        <dl class="about-kv">
+          <dt>Version</dt><dd id="about-version" class="mono">—</dd>
+          <dt>Repository</dt><dd><a class="mono ext-link" data-ext="repo" id="about-repo" href="#">—</a></dd>
+          <dt>License</dt><dd id="about-license">—</dd>
+        </dl>
+      </div>
+
+      <div class="panel about-panel">
+        <div class="panel-head"><h2>Credits</h2></div>
+        <dl class="about-kv">
+          <dt>Designed &amp; built by</dt>
+          <dd>
+            <span id="about-author">—</span>
+            ·
+            <a class="mono ext-link" data-ext="author" id="about-author-handle" href="#">—</a>
+          </dd>
+          <dt>Made with</dt>
+          <dd>☕ too much coffee and a strong opinion about what clipboard sync should look like.</dd>
+        </dl>
+      </div>
     </section>
   </main>
 
