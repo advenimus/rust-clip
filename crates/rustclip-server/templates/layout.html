@@ -3,13 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>{% block title %}RustClip{% endblock %}</title>
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v=2" />
 </head>
-<body class="theme-dark">
+<body>
   <header class="topbar">
     <a class="brand" href="/admin/">
-      <img class="brand-mark" src="/static/logo.png" alt="" />
+      <picture>
+        <source srcset="/static/logo-light.png" media="(prefers-color-scheme: light)" />
+        <img class="brand-mark" src="/static/logo.png" alt="" />
+      </picture>
       <span class="brand-name">RustClip</span>
     </a>
     <nav class="nav-links">

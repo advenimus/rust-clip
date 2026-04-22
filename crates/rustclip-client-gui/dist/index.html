@@ -3,15 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>RustClip</title>
-  <link rel="stylesheet" href="app.css" />
+  <link rel="stylesheet" href="app.css?v=2" />
 </head>
-<body class="theme-dark">
+<body>
   <header class="topbar">
-    <span class="brand"><img class="brand-mark" src="logo.png" alt=""> <span class="brand-name">RustClip</span></span>
+    <span class="brand">
+      <picture>
+        <source srcset="logo-light.png" media="(prefers-color-scheme: light)" />
+        <img class="brand-mark" src="logo.png" alt="" />
+      </picture>
+      <span class="brand-name">RustClip</span>
+    </span>
     <nav class="tabs">
       <a href="#account" data-tab="account">Account</a>
       <a href="#history" data-tab="history">History</a>
+      <a href="#settings" data-tab="settings">Settings</a>
       <a href="#about" data-tab="about">About</a>
     </nav>
   </header>
@@ -54,10 +62,18 @@
           <button type="submit" class="btn btn-primary">Log in</button>
         </form>
       </div>
+      <div id="account-msg" class="status"></div>
+    </section>
+
+    <section id="panel-settings" class="panel hidden">
       <div class="settings-group">
+        <h3>Startup</h3>
         <label class="checkbox">
           <input type="checkbox" id="autostart-toggle"> Start RustClip on login
         </label>
+      </div>
+      <div class="settings-group">
+        <h3>Auto-sync files</h3>
         <label class="checkbox">
           <input type="checkbox" id="auto-sync-files-toggle"> Auto-sync files copied from Finder / Explorer
         </label>
@@ -69,7 +85,14 @@
         </label>
         <p class="muted-note">Copies larger than this are skipped. Use the <code>send-files</code> CLI to send anything over the cap on demand.</p>
       </div>
-      <div id="account-msg" class="status"></div>
+      <div class="settings-group">
+        <h3>Notifications</h3>
+        <label class="checkbox">
+          <input type="checkbox" id="notifications-toggle"> Show a notification when a new clipboard item arrives
+        </label>
+        <p class="muted-note">Clipboard history always updates in the background. This toggle only controls the OS toast.</p>
+      </div>
+      <div id="settings-msg" class="status"></div>
     </section>
 
     <section id="panel-history" class="panel hidden">
@@ -85,7 +108,10 @@
 
     <section id="panel-about" class="hidden">
       <div class="about-hero">
-        <img class="about-mark" src="logo.png" alt="RustClip" />
+        <picture>
+          <source srcset="logo-light.png" media="(prefers-color-scheme: light)" />
+          <img class="about-mark" src="logo.png" alt="RustClip" />
+        </picture>
         <div class="about-copy">
           <h1 class="about-title">RustClip</h1>
           <p class="about-tagline">Self-hosted, end-to-end encrypted universal clipboard sync.</p>

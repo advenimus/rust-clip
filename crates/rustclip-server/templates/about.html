@@ -25,7 +25,10 @@
 {% endmatch %}
 
 <section class="panel about-hero">
-  <img class="about-mark" src="/static/logo.png" alt="RustClip" />
+  <picture>
+    <source srcset="/static/logo-light.png" media="(prefers-color-scheme: light)" />
+    <img class="about-mark" src="/static/logo.png" alt="RustClip" />
+  </picture>
   <div class="about-copy">
     <h2 class="about-title">RustClip</h2>
     <p class="about-tagline">Self-hosted, end-to-end encrypted universal clipboard sync — pure Rust from the server to the desktop.</p>

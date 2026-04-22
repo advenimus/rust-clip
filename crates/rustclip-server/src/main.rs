@@ -127,6 +127,7 @@ async fn main() -> Result<()> {
         .route("/static/app.css", get(serve_app_css))
         .route("/static/admin.js", get(serve_admin_js))
         .route("/static/logo.png", get(serve_logo_png))
+        .route("/static/logo-light.png", get(serve_logo_light_png))
         .nest("/admin", admin_router)
         .nest("/api/v1", api_router)
         .nest("/ws", ws::router())
@@ -189,6 +190,7 @@ async fn healthz() -> impl IntoResponse {
 const APP_CSS: &str = include_str!("../static/app.css");
 const ADMIN_JS: &str = include_str!("../static/admin.js");
 const LOGO_PNG: &[u8] = include_bytes!("../static/logo.png");
+const LOGO_LIGHT_PNG: &[u8] = include_bytes!("../static/logo-light.png");
 
 async fn serve_app_css() -> impl IntoResponse {
     ([(header::CONTENT_TYPE, "text/css; charset=utf-8")], APP_CSS)
@@ -211,6 +213,16 @@ async fn serve_logo_png() -> impl IntoResponse {
             (header::CACHE_CONTROL, "public, max-age=86400"),
         ],
         LOGO_PNG,
+    )
+}
+
+async fn serve_logo_light_png() -> impl IntoResponse {
+    (
+        [
+            (header::CONTENT_TYPE, "image/png"),
+            (header::CACHE_CONTROL, "public, max-age=86400"),
+        ],
+        LOGO_LIGHT_PNG,
     )
 }
 

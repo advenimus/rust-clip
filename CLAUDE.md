@@ -105,20 +105,34 @@ All phases are on `main`. Commits intentionally follow `feat: Phase N <topic>` s
 
 ### Server
 
+**Prefer Docker for test runs.** The server ships inside a distroless image and expects the `/data` volume, signal-based shutdown, and reverse-proxy topology that compose models. `cargo run` works for tight inner-loop Rust changes but is not the shape we test against.
+
+Default port is **`9123`** (bound to `127.0.0.1` by the compose file). Host-side port override: `RUSTCLIP_HOST_PORT`. The container always listens on `9123` internally regardless.
+
 ```bash
-# Quick dev loop
+# Primary: Docker, build locally. Rebuilds when Rust / Dockerfile / compose change.
+docker compose -f docker/docker-compose.yml up -d --build
+curl -sf http://127.0.0.1:9123/healthz              # sanity check
+# => admin portal at http://127.0.0.1:9123/admin (default creds: admin / please-change-me)
+
+# Tail logs
+docker compose -f docker/docker-compose.yml logs -f rustclip
+
+# Shut down
+docker compose -f docker/docker-compose.yml down
+
+# Run on a different host port (container stays on 9123 internally)
+RUSTCLIP_HOST_PORT=39999 docker compose -f docker/docker-compose.yml up -d --build
+
+# Pull the published image instead of building locally
+docker pull ghcr.io/advenimus/rustclip-server:latest
+
+# Fallback: bare cargo run (skip Docker). Useful only for fast iteration on server code.
 RUSTCLIP_ADMIN_USERNAME=admin RUSTCLIP_ADMIN_PASSWORD=please-change-me \
   cargo run -p rustclip-server
-# => admin portal at http://127.0.0.1:8080/admin
-
-# Docker (production shape, build locally)
-docker compose -f docker/docker-compose.yml up -d --build
-
-# Docker (pull the published image instead of building)
-docker pull ghcr.io/advenimus/rustclip-server:latest
 ```
 
-Env vars documented in `docs/operator-guide.md`. Defaults are sane; the ones you'll touch are `RUSTCLIP_ADMIN_USERNAME`, `RUSTCLIP_ADMIN_PASSWORD`, `RUSTCLIP_PUBLIC_URL`, and the `/data` volume mount.
+Env vars documented in `docs/operator-guide.md`. Defaults are sane; the ones you'll touch are `RUSTCLIP_ADMIN_USERNAME`, `RUSTCLIP_ADMIN_PASSWORD`, `RUSTCLIP_PUBLIC_URL`, `RUSTCLIP_HOST_PORT`, and the `/data` volume mount.
 
 ### Client
 
@@ -127,7 +141,7 @@ Env vars documented in `docs/operator-guide.md`. Defaults are sane; the ones you
 cargo run -p rustclip-client-gui
 
 # CLI
-cargo run -p rustclip-client -- enroll --server-url http://127.0.0.1:8080
+cargo run -p rustclip-client -- enroll --server-url http://127.0.0.1:9123
 cargo run -p rustclip-client -- sync
 cargo run -p rustclip-client -- history
 cargo run -p rustclip-client -- send-files foo.pdf bar.png
@@ -163,6 +177,8 @@ Current state: 57 tests passing (16 client + 38 server + 3 shared). CI runs the 
 - **No Intel Mac in the release matrix.** `macos-13` runners queue 15+ minutes under load and modern Macs are all Apple Silicon. The v0.1.0 tag attempt had all three other platforms finish while Intel Mac sat queued — we cut it from the matrix rather than wait. If Intel Mac is ever requested, cross-compile from `macos-14` via `--target x86_64-apple-darwin` instead of re-adding `macos-13`.
 - **Tauri config `version` is manually synced.** `tauri.conf.json` hardcodes `"version"` rather than reading from `Cargo.toml` — simpler and reliable. Bumping a release means editing **both** `Cargo.toml` (workspace) and `crates/rustclip-client-gui/tauri.conf.json`.
 - **App icon source is `icons/logo-color.png`, not `icon.png`.** A placeholder `icon.png` shipped with v0.1.0 and gave the DMG a blank orange square. Regenerating must use `cargo tauri icon crates/rustclip-client-gui/icons/logo-color.png` (or first `cp logo-color.png icon.png` then run `cargo tauri icon icons/icon.png`). Always delete the `icons/ios/`, `icons/android/`, and `Square*Logo.png` / `StoreLogo.png` artifacts afterwards — desktop-only project.
+- **Bundle icon split: Windows from orange, macOS from black+orange.** `icon.ico` (Windows exe + NSIS installer) and the `32/64/128/128@2x.png` size variants are generated from `icons/logo-color.png` (orange) because Windows taskbars lean dark and the orange pops. `icon.icns` (macOS Finder, dock, DMG window, Launchpad) is generated from `icons/logo-on-light.png` (black clipboard with orange arrows) because the DMG window background is white and the macOS dock is translucent — the black+orange reads on both. Regenerating the bundle icons is a **two-pass** operation: `cp icons/logo-color.png icons/icon.png && cargo tauri icon icons/icon.png` (keep .ico + size PNGs), then `cp icons/logo-on-light.png icons/icon.png && cargo tauri icon icons/icon.png` and `git checkout -- icons/{32x32,64x64,128x128,128x128@2x}.png icons/icon.ico` (keep only the new .icns).
+- **Light/dark theming is pure `prefers-color-scheme`, no in-app toggle.** Admin portal (`static/app.css`) and Tauri GUI (`dist/app.css`) both define a dark `:root` palette and an `@media (prefers-color-scheme: light)` override block. Templates carry `<meta name="color-scheme" content="light dark" />` and use `<picture>` with a `media="(prefers-color-scheme: light)"` `<source>` pointing at `logo-light.png` (the black+orange variant) so the logo swaps with the OS theme. Tray icon stays platform-conditional: white template icon on macOS (auto-inverts), orange `logo-color.png` on Windows/Linux (legible on both light and dark taskbars). No runtime swap.
 - **`cargo audit` ignores `RUSTSEC-2023-0071`.** `rsa 0.9.x` Marvin Attack is pulled by `sqlx-macros-core` at compile time for MySQL type introspection. rustclip-server only speaks SQLite, so `rsa` never ships in the release binary. Ignored in `.github/workflows/ci.yml` with justification; revisit if sqlx publishes a fix.
 
 ## Known deferrals (not in any phase)

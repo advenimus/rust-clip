@@ -15,12 +15,24 @@ use crate::commands::open_or_focus;
 const TRAY_ID: &str = "rustclip-tray";
 
 pub fn install(app: &AppHandle) -> Result<()> {
-    let icon_bytes = include_bytes!("../icons/logo-white.png");
+    // macOS menu bar: white template icon that the OS auto-inverts per light/dark bar.
+    // Windows / Linux taskbars do not honor template mode, so ship the orange brand
+    // icon — legible on both light and dark taskbars.
+    #[cfg(target_os = "macos")]
+    let icon_bytes: &[u8] = include_bytes!("../icons/logo-white.png");
+    #[cfg(not(target_os = "macos"))]
+    let icon_bytes: &[u8] = include_bytes!("../icons/logo-color.png");
+
     let icon = Image::from_bytes(icon_bytes)?;
     let menu = build_initial_menu(app)?;
-    let _tray: TrayIcon = TrayIconBuilder::with_id(TRAY_ID)
-        .icon(icon)
-        .icon_as_template(true)
+
+    let mut builder = TrayIconBuilder::with_id(TRAY_ID).icon(icon);
+    #[cfg(target_os = "macos")]
+    {
+        builder = builder.icon_as_template(true);
+    }
+
+    let _tray: TrayIcon = builder
         .tooltip("RustClip")
         .menu(&menu)
         .show_menu_on_left_click(true)

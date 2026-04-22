@@ -219,7 +219,11 @@ async fn build_outgoing(
             Ok(Some((msg, OutgoingPreview::Text(text))))
         }
         ClipEvent::Image(image) => {
-            info!(width = image.width, height = image.height, "outgoing image clip");
+            info!(
+                width = image.width,
+                height = image.height,
+                "outgoing image clip"
+            );
             let png_bytes = image_codec::encode_png(&image)?;
             let plain_len = png_bytes.len() as i64;
             let width = image.width;

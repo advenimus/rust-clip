@@ -3,13 +3,17 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light dark" />
   <title>Sign in · RustClip</title>
-  <link rel="stylesheet" href="/static/app.css" />
+  <link rel="stylesheet" href="/static/app.css?v=2" />
 </head>
-<body class="theme-dark login-page">
+<body class="login-page">
   <main class="login-card">
     <header class="login-brand">
-      <img class="brand-mark" src="/static/logo.png" alt="" />
+      <picture>
+        <source srcset="/static/logo-light.png" media="(prefers-color-scheme: light)" />
+        <img class="brand-mark" src="/static/logo.png" alt="" />
+      </picture>
       <h1>RustClip</h1>
       <p class="muted">Admin console</p>
     </header>
