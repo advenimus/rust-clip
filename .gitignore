@@ -11,3 +11,16 @@
 
 # Tauri generated
 crates/rustclip-client-gui/gen/
+
+# Tauri updater signing material — never commit. The real copies live
+# under ~/.tauri/ and in GitHub Actions secrets. These globs catch
+# accidental paste/copy into the worktree.
+*.key
+*.key.pub
+*.password
+.tauri/
+rustclip.key*
+rustclip.password
+
+# Machine-local MCP configs (absolute paths that won't match other machines).
+.mcp.json
