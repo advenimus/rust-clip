@@ -32,6 +32,8 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
         admin_password: None,
         max_payload_bytes: 1024 * 1024,
         offline_ttl_hours: 24,
+        trusted_proxies: Vec::new(),
+        metrics_token: None,
     });
     tokio::fs::create_dir_all(config.blobs_dir()).await.unwrap();
 
@@ -51,7 +53,7 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
         update_state: crate::update_check::UpdateState::new(),
     };
     let app = Router::new()
-        .nest("/api/v1", crate::api::router(RateLimiter::new()))
+        .nest("/api/v1", crate::api::router(state.clone()))
         .with_state(state);
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();

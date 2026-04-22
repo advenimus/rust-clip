@@ -7,7 +7,7 @@ use sqlx::FromRow;
 use tower_sessions::Session;
 use uuid::Uuid;
 
-use crate::state::AppState;
+use crate::{admin::csrf, state::AppState};
 
 pub const ADMIN_USER_KEY: &str = "admin_user_id";
 
@@ -16,6 +16,10 @@ pub struct AdminUser {
     pub id: Uuid,
     pub username: String,
     pub display_name: String,
+    /// Session-bound CSRF token. Always populate into any admin
+    /// template that contains a form so the CSRF middleware can
+    /// validate the resulting POST.
+    pub csrf_token: String,
 }
 
 #[derive(FromRow)]
@@ -62,12 +66,19 @@ impl FromRequestParts<AppState> for AdminUser {
             redirect_login()
         })?;
 
-        row.map(|r| AdminUser {
+        let Some(r) = row else {
+            return Err(redirect_login());
+        };
+        let csrf_token = csrf::ensure_token(&session).await.map_err(|e| {
+            tracing::error!(error = %e, "csrf token init failed");
+            redirect_login()
+        })?;
+        Ok(AdminUser {
             id: r.id,
             username: r.username,
             display_name: r.display_name,
+            csrf_token,
         })
-        .ok_or_else(redirect_login)
     }
 }
 

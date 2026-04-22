@@ -1,4 +1,8 @@
-use std::{env, net::SocketAddr, path::PathBuf};
+use std::{
+    env,
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+};
 
 use anyhow::{Context, Result};
 
@@ -17,6 +21,13 @@ pub struct Config {
     pub admin_password: Option<String>,
     pub max_payload_bytes: u64,
     pub offline_ttl_hours: u32,
+    /// Peer IPs whose `X-Forwarded-For` header is honored when
+    /// computing the rate-limit key. Empty = never trust XFF and
+    /// always use the socket peer address.
+    pub trusted_proxies: Vec<IpAddr>,
+    /// Optional bearer token guarding `/metrics`. When `None`, the
+    /// endpoint is open (operator is expected to firewall it).
+    pub metrics_token: Option<String>,
 }
 
 impl Config {
@@ -54,6 +65,25 @@ impl Config {
             .context("RUSTCLIP_OFFLINE_TTL_HOURS must be an integer")?
             .unwrap_or(DEFAULT_OFFLINE_TTL_HOURS);
 
+        let trusted_proxies = env::var("RUSTCLIP_TRUSTED_PROXIES")
+            .ok()
+            .map(|s| {
+                s.split(',')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| {
+                        s.parse::<IpAddr>()
+                            .with_context(|| format!("invalid proxy ip: {s}"))
+                    })
+                    .collect::<Result<Vec<_>>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+
+        let metrics_token = env::var("RUSTCLIP_METRICS_TOKEN")
+            .ok()
+            .filter(|s| !s.is_empty());
+
         Ok(Self {
             bind_addr,
             data_dir,
@@ -62,6 +92,8 @@ impl Config {
             admin_password,
             max_payload_bytes,
             offline_ttl_hours,
+            trusted_proxies,
+            metrics_token,
         })
     }
 

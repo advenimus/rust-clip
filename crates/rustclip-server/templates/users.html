@@ -11,6 +11,7 @@
     <h2>Add a user</h2>
   </header>
   <form method="post" action="/admin/users" class="form-inline">
+    {% include "_csrf.html" %}
     <label>
       <span>Username</span>
       <input type="text" name="username" required pattern="[a-zA-Z0-9._-]{1,64}" />
@@ -68,11 +69,13 @@
                 {% if u.is_admin %}
                 {% else %}
                   <form method="post" action="/admin/users/{{ u.id }}/reset-enrollment" class="menu-form">
+                    {% include "_csrf.html" %}
                     <button type="submit" class="menu-item">New enrollment token</button>
                   </form>
                   <div class="menu-separator"></div>
                   <form method="post" action="/admin/users/{{ u.id }}/delete" class="menu-form"
                         onsubmit="return confirm('Delete user {{ u.username }}? This revokes all their devices.');">
+                    {% include "_csrf.html" %}
                     <button type="submit" class="menu-item menu-item-danger">Delete user</button>
                   </form>
                 {% endif %}
@@ -88,6 +91,7 @@
 
 <dialog id="reset-password-dialog" class="modal">
   <form method="post" class="modal-body" id="reset-password-form">
+    {% include "_csrf.html" %}
     <h3>Reset password for <span class="mono" data-field="username"></span></h3>
     <label>
       New password

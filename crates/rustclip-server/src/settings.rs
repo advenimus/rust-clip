@@ -174,6 +174,8 @@ mod tests {
             admin_password: None,
             max_payload_bytes: 10 * 1024 * 1024,
             offline_ttl_hours: 24,
+            trusted_proxies: Vec::new(),
+            metrics_token: None,
         }
     }
 

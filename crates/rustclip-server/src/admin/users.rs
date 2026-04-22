@@ -53,6 +53,7 @@ pub struct UserRowView {
 #[template(path = "users.html")]
 struct UsersTemplate<'a> {
     admin_display_name: &'a str,
+    csrf_token: String,
     users: Vec<UserRowView>,
 }
 
@@ -81,6 +82,7 @@ pub async fn list(State(state): State<AppState>, admin: AdminUser) -> AppResult<
 
     let tmpl = UsersTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         users,
     };
     Ok(Html(tmpl.render()?).into_response())
@@ -96,6 +98,7 @@ pub struct CreateUserForm {
 #[template(path = "user_created.html")]
 struct UserCreatedTemplate<'a> {
     admin_display_name: &'a str,
+    csrf_token: String,
     username: &'a str,
     display_name: &'a str,
     enrollment_token: &'a str,
@@ -192,6 +195,7 @@ pub async fn create(
 
     let tmpl = UserCreatedTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         username,
         display_name,
         enrollment_token: &generated.plaintext,
@@ -292,6 +296,7 @@ pub async fn reset_enrollment(
 
     let tmpl = UserCreatedTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         username: &user.0,
         display_name: &user.1,
         enrollment_token: &generated.plaintext,
@@ -323,6 +328,7 @@ struct TargetUserRow {
 #[template(path = "user_password_reset.html")]
 struct PasswordResetTemplate<'a> {
     admin_display_name: &'a str,
+    csrf_token: String,
     username: &'a str,
     display_name: &'a str,
     new_password: &'a str,
@@ -445,6 +451,7 @@ pub async fn reset_password(
 
     let tmpl = PasswordResetTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         username: &user.username,
         display_name: &user.display_name,
         new_password: &plaintext,

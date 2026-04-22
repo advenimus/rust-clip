@@ -36,6 +36,8 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> SocketAddr {
         admin_password: None,
         max_payload_bytes: 1024 * 1024,
         offline_ttl_hours: 24,
+        trusted_proxies: Vec::new(),
+        metrics_token: None,
     });
     let settings = SettingsStore::from_values(RuntimeSettings {
         max_payload_bytes: 1024 * 1024,

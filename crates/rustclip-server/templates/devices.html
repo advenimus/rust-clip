@@ -42,6 +42,7 @@
           <td class="row-actions">
             {% if d.is_active %}
               <form method="post" action="/admin/devices/{{ d.id }}/revoke" class="inline" onsubmit="return confirm('Revoke {{ d.device_name }}? This device will be signed out and must re-enroll to regain access.');">
+                {% include "_csrf.html" %}
                 <button type="submit" class="btn btn-danger">Revoke</button>
               </form>
             {% endif %}

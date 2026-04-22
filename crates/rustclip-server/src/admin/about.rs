@@ -14,6 +14,7 @@ const AUTHOR_HANDLE: &str = "advenimus";
 #[template(path = "about.html")]
 struct AboutTemplate<'a> {
     admin_display_name: &'a str,
+    csrf_token: String,
     version: &'static str,
     repo_url: &'static str,
     author_name: &'static str,
@@ -48,6 +49,7 @@ pub async fn show(State(state): State<AppState>, admin: AdminUser) -> AppResult<
     };
     let tmpl = AboutTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         version: env!("CARGO_PKG_VERSION"),
         repo_url: REPO_URL,
         author_name: AUTHOR_NAME,

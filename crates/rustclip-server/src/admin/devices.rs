@@ -44,6 +44,7 @@ pub struct DeviceRowView {
 #[template(path = "devices.html")]
 struct DevicesTemplate<'a> {
     admin_display_name: &'a str,
+    csrf_token: String,
     devices: Vec<DeviceRowView>,
     flash: Option<String>,
 }
@@ -87,6 +88,7 @@ pub async fn list(
 
     let tmpl = DevicesTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         devices,
         flash,
     };

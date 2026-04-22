@@ -19,6 +19,7 @@
     <h2>Runtime settings</h2>
   </header>
   <form method="post" action="/admin/settings" class="settings-form">
+    {% include "_csrf.html" %}
     <label>
       Max payload bytes
       <input type="text" name="max_payload_bytes" value="{{ current.max_payload_bytes }}" />

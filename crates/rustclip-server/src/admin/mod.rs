@@ -8,20 +8,25 @@ use crate::{rate_limit, state::AppState};
 
 pub mod about;
 pub mod audit_page;
+pub mod csrf;
 pub mod dashboard;
 pub mod devices;
 pub mod login;
 pub mod settings;
 pub mod users;
 
-pub fn router(auth_limiter: rate_limit::RateLimiter) -> Router<AppState> {
+pub fn router(state: AppState) -> Router<AppState> {
     let login_routes = Router::new()
         .route("/login", get(login::show).post(login::submit))
         .layer(from_fn_with_state(
-            auth_limiter,
+            state.clone(),
             rate_limit::admin_login_layer,
         ));
 
+    // Routes that require an authenticated admin and modify state. CSRF
+    // middleware runs after AdminUser so we get a rejection response
+    // (redirect to /admin/login) for unauthenticated callers, and a 403
+    // for authenticated-but-CSRF-missing callers.
     Router::new()
         .merge(login_routes)
         .route("/logout", post(login::logout))
@@ -39,4 +44,5 @@ pub fn router(auth_limiter: rate_limit::RateLimiter) -> Router<AppState> {
         .route("/audit-log.csv", get(audit_page::export_csv))
         .route("/settings", get(settings::show).post(settings::update))
         .route("/about", get(about::show))
+        .layer(from_fn_with_state(state, csrf::csrf_layer))
 }

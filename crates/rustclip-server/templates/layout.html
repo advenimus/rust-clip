@@ -25,6 +25,7 @@
       <a href="/admin/about">About</a>
     </nav>
     <form method="post" action="/admin/logout" class="logout-form">
+      {% include "_csrf.html" %}
       <span class="who">{{ admin_display_name }}</span>
       <button type="submit" class="btn btn-ghost">Log out</button>
     </form>

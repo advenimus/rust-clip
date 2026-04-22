@@ -69,6 +69,8 @@ mod tests {
             admin_password: admin_pw.map(String::from),
             max_payload_bytes: 0,
             offline_ttl_hours: 0,
+            trusted_proxies: Vec::new(),
+            metrics_token: None,
         }
     }
 

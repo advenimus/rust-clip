@@ -25,6 +25,7 @@ struct RecentEventRow {
 #[template(path = "dashboard.html")]
 struct DashboardTemplate<'a> {
     admin_display_name: &'a str,
+    csrf_token: String,
     user_count: i64,
     active_device_count: i64,
     clip_events_24h: i64,
@@ -88,6 +89,7 @@ pub async fn show(State(state): State<AppState>, admin: AdminUser) -> AppResult<
 
     let tmpl = DashboardTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         user_count,
         active_device_count,
         clip_events_24h,

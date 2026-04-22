@@ -23,6 +23,7 @@ pub const EVENT_SETTINGS_UPDATED: &str = "settings_updated";
 #[template(path = "settings.html")]
 struct SettingsTemplate<'a> {
     admin_display_name: &'a str,
+    csrf_token: String,
     current: RuntimeSettings,
     error: Option<String>,
     saved: bool,
@@ -45,6 +46,7 @@ fn render(
 ) -> AppResult<Response> {
     let tmpl = SettingsTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         current,
         error,
         saved,

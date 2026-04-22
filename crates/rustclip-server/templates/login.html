@@ -23,6 +23,7 @@
     {% when None %}
     {% endmatch %}
     <form method="post" action="/admin/login" class="login-form">
+      {% include "_csrf.html" %}
       <label>
         <span>Username</span>
         <input type="text" name="username" required autofocus autocomplete="username" />

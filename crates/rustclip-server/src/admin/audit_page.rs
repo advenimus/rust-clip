@@ -38,6 +38,7 @@ pub struct AuditRowView {
 #[template(path = "audit_log.html")]
 struct AuditLogTemplate<'a> {
     admin_display_name: &'a str,
+    csrf_token: String,
     rows: Vec<AuditRowView>,
     has_next: bool,
     next_cursor: Option<i64>,
@@ -222,6 +223,7 @@ pub async fn list(
 
     let tmpl = AuditLogTemplate {
         admin_display_name: &admin.display_name,
+        csrf_token: admin.csrf_token.clone(),
         rows: views,
         has_next,
         next_cursor,

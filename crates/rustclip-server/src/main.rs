@@ -19,7 +19,7 @@ mod tokens;
 mod update_check;
 mod ws;
 
-use std::{env, sync::Arc};
+use std::{env, net::SocketAddr, sync::Arc};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -30,7 +30,6 @@ use axum::{
     routing::get,
 };
 use tokio::net::TcpListener;
-use tower::Layer;
 use tower_http::{
     limit::RequestBodyLimitLayer, normalize_path::NormalizePathLayer,
     set_header::SetResponseHeaderLayer, trace::TraceLayer,
@@ -99,7 +98,7 @@ async fn main() -> Result<()> {
         update_state,
     };
 
-    let admin_router = admin::router(state.auth_limiter.clone())
+    let admin_router = admin::router(state.clone())
         .layer(SetResponseHeaderLayer::overriding(
             header::CONTENT_SECURITY_POLICY,
             axum::http::HeaderValue::from_static(
@@ -122,7 +121,7 @@ async fn main() -> Result<()> {
     // at the network edge, not after the sqlx-layer parses them.
     const SMALL_BODY_LIMIT: usize = 1024 * 1024;
     let api_router =
-        api::router(state.auth_limiter.clone()).layer(DefaultBodyLimit::max(SMALL_BODY_LIMIT));
+        api::router(state.clone()).layer(DefaultBodyLimit::max(SMALL_BODY_LIMIT));
 
     let pool_for_shutdown = state.db.clone();
     let app = Router::new()
@@ -145,20 +144,27 @@ async fn main() -> Result<()> {
         ))
         // Top-level wall so an attacker cannot POST gigabytes at /healthz or
         // any unrouted path. Blob uploads override this inside the blob router.
-        .layer(RequestBodyLimitLayer::new(api::blobs::BLOB_BODY_LIMIT));
-
-    // Trim trailing slashes so /admin/ and /admin match the same route.
-    let service = NormalizePathLayer::trim_trailing_slash().layer(app);
+        .layer(RequestBodyLimitLayer::new(api::blobs::BLOB_BODY_LIMIT))
+        // Trim trailing slashes so /admin/ and /admin match the same route.
+        // Outermost layer — runs before routing so the route table gets the
+        // trimmed path.
+        .layer(NormalizePathLayer::trim_trailing_slash());
 
     let listener = TcpListener::bind(config.bind_addr)
         .await
         .with_context(|| format!("failed to bind {}", config.bind_addr))?;
 
     info!(addr = %config.bind_addr, "rustclip-server listening");
-    axum::serve(listener, tower::make::Shared::new(service))
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("server error")?;
+    // ConnectInfo<SocketAddr> is made available to handlers + middleware so
+    // the rate limiter can key on the real socket peer and only honor
+    // X-Forwarded-For when the peer is in `RUSTCLIP_TRUSTED_PROXIES`.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("server error")?;
 
     info!("shutdown: checkpointing WAL and closing pool");
     if let Err(e) = sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)")

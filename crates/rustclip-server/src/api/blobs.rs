@@ -28,7 +28,13 @@ use tokio_util::io::ReaderStream;
 use tracing::{debug, warn};
 use uuid::Uuid;
 
-use crate::{api::ApiError, api::device_auth::DeviceAuth, db::now_millis, state::AppState};
+use crate::{
+    api::ApiError,
+    api::device_auth::DeviceAuth,
+    db::now_millis,
+    rate_limit::{BLOB_UPLOAD_LIMIT, RateLimiter},
+    state::AppState,
+};
 
 /// Hard upper bound on blob upload body size (also ceils the
 /// settings-configurable `max_payload_bytes`). 1 GiB.
@@ -50,6 +56,13 @@ async fn upload(
     headers: HeaderMap,
     body: Body,
 ) -> Result<Json<BlobUploadResponse>, ApiError> {
+    // H2: per-device rate limit. 20-burst then ~10/min refill. Scoped
+    // on `auth.device_id` because a single compromised token shouldn't
+    // be able to swamp the shared disk/SQLite write lock, and keying
+    // by IP would let a botnet bypass and punish sibling users on
+    // shared-NAT networks.
+    check_blob_upload_budget(&state.auth_limiter, auth.device_id.to_string().as_str()).await?;
+
     let declared_len = headers
         .get(header::CONTENT_LENGTH)
         .and_then(|v| v.to_str().ok())
@@ -234,4 +247,17 @@ async fn remove(
 
 fn blob_path(state: &AppState, id: Uuid) -> PathBuf {
     state.config.blobs_dir().join(id.to_string())
+}
+
+async fn check_blob_upload_budget(limiter: &RateLimiter, device_id: &str) -> Result<(), ApiError> {
+    let key = format!("blob_upload:{device_id}");
+    if limiter.check(&key, BLOB_UPLOAD_LIMIT).await {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "blob upload rate limit exceeded for this device",
+        ))
+    }
 }

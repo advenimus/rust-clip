@@ -5,17 +5,20 @@
 
 use std::{
     collections::HashMap,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
 };
 
 use axum::{
-    extract::State,
+    extract::{ConnectInfo, State},
     http::{HeaderMap, Request, StatusCode},
     middleware::Next,
     response::{IntoResponse, Response},
 };
 use tokio::sync::Mutex;
+
+use crate::state::AppState;
 
 #[derive(Debug, Clone, Copy)]
 pub struct RateLimitConfig {
@@ -34,6 +37,12 @@ impl RateLimitConfig {
 
 pub const ADMIN_LOGIN_LIMIT: RateLimitConfig = RateLimitConfig::new(10.0, 10.0 / 60.0);
 pub const AUTH_API_LIMIT: RateLimitConfig = RateLimitConfig::new(10.0, 10.0 / 60.0);
+/// Per-username admin-login lockout: 5 attempts, then one refill every
+/// 5 minutes. Harder than the per-IP limit because it ignores XFF
+/// spoofing and bot-net distribution.
+pub const ADMIN_USERNAME_LOCKOUT: RateLimitConfig = RateLimitConfig::new(5.0, 1.0 / 300.0);
+/// Per-device blob upload limit: 20-burst then one every 6 seconds.
+pub const BLOB_UPLOAD_LIMIT: RateLimitConfig = RateLimitConfig::new(20.0, 10.0 / 60.0);
 
 struct Bucket {
     tokens: f64,
@@ -107,38 +116,70 @@ impl RateLimiter {
     }
 }
 
-/// Extract a stable client identifier from headers. Prefers `X-Forwarded-For`
-/// (standard when running behind a reverse proxy) and falls back to a shared
-/// "direct" bucket for clients hitting the server without a proxy in front.
-pub fn client_ip_from_headers(headers: &HeaderMap) -> String {
-    headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .and_then(|s| s.split(',').next())
-        .map(|s| s.trim().to_string())
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "direct".into())
+/// Resolve the client IP that rate limits should be keyed on.
+///
+/// Trust rules:
+/// - If the socket peer is in `trusted_proxies`, honor the first value
+///   in `X-Forwarded-For` (that's the originating client per RFC 7239).
+/// - Otherwise use the socket peer address directly — an attacker
+///   cannot spoof this without controlling the network path.
+///
+/// Returns a stable string identifier suitable for use as a bucket key.
+pub fn resolve_client_ip(
+    headers: &HeaderMap,
+    peer: SocketAddr,
+    trusted_proxies: &[IpAddr],
+) -> String {
+    if trusted_proxies.contains(&peer.ip()) {
+        if let Some(xff) = headers
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|s| s.split(',').next())
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            return xff.to_string();
+        }
+    }
+    peer.ip().to_string()
 }
 
 pub async fn admin_login_layer(
-    State(limiter): State<RateLimiter>,
+    State(state): State<AppState>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    limit_non_get(&limiter, ADMIN_LOGIN_LIMIT, req, next, "admin_login").await
+    limit_non_get(
+        &state.auth_limiter,
+        ADMIN_LOGIN_LIMIT,
+        &state.config.trusted_proxies,
+        req,
+        next,
+        "admin_login",
+    )
+    .await
 }
 
 pub async fn auth_api_layer(
-    State(limiter): State<RateLimiter>,
+    State(state): State<AppState>,
     req: Request<axum::body::Body>,
     next: Next,
 ) -> Response {
-    limit_non_get(&limiter, AUTH_API_LIMIT, req, next, "auth_api").await
+    limit_non_get(
+        &state.auth_limiter,
+        AUTH_API_LIMIT,
+        &state.config.trusted_proxies,
+        req,
+        next,
+        "auth_api",
+    )
+    .await
 }
 
 async fn limit_non_get(
     limiter: &RateLimiter,
     cfg: RateLimitConfig,
+    trusted_proxies: &[IpAddr],
     req: Request<axum::body::Body>,
     next: Next,
     scope: &'static str,
@@ -146,10 +187,18 @@ async fn limit_non_get(
     if req.method() == axum::http::Method::GET {
         return next.run(req).await;
     }
-    let ip = client_ip_from_headers(req.headers());
-    let key = format!("{scope}:{ip}");
+    // The connecting socket peer is attached as a request extension by
+    // axum when the server is started via
+    // `into_make_service_with_connect_info::<SocketAddr>()`. Extract it
+    // manually here to sidestep the middleware-extractor tuple limits.
+    let peer_ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|ConnectInfo(s)| resolve_client_ip(req.headers(), *s, trusted_proxies))
+        .unwrap_or_else(|| "unknown".to_string());
+    let key = format!("{scope}:{peer_ip}");
     if !limiter.check(&key, cfg).await {
-        tracing::warn!(scope, %ip, "rate limit exceeded");
+        tracing::warn!(scope, ip = %peer_ip, "rate limit exceeded");
         return (
             StatusCode::TOO_MANY_REQUESTS,
             [(
