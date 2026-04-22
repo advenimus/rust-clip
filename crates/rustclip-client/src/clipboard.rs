@@ -56,6 +56,12 @@ pub enum ClipboardCmd {
     Shutdown,
 }
 
+/// Sender half of the clipboard worker channel. Cheap to clone —
+/// wraps `std::sync::mpsc::Sender` which is itself `Clone`. Cloning
+/// lets multiple call sites (the sync loop, the Tauri history-recopy
+/// command, the tray recent-clips menu) all drive the single
+/// `arboard::Clipboard` that lives on the worker thread.
+#[derive(Clone)]
 pub struct ClipboardHandle {
     cmd_tx: stdmpsc::Sender<ClipboardCmd>,
 }

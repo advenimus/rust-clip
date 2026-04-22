@@ -88,6 +88,7 @@ fn main() {
             commands::cmd_list_history,
             commands::cmd_clear_history,
             commands::cmd_copy_history_text,
+            commands::cmd_copy_history_item,
             commands::cmd_start_sync,
             commands::cmd_stop_sync,
             commands::cmd_sync_running,

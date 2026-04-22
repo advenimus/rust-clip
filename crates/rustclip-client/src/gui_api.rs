@@ -180,12 +180,18 @@ pub fn load_sync_context() -> Result<SyncContext> {
     })
 }
 
-pub async fn run_sync(ctx: SyncContext) -> Result<()> {
+pub async fn run_sync(
+    ctx: SyncContext,
+    clipboard: crate::clipboard::ClipboardHandle,
+    event_rx: tokio::sync::mpsc::Receiver<crate::clipboard::ClipEvent>,
+) -> Result<()> {
     sync::run(
         ctx.server_url,
         ctx.device_token,
         ctx.device_id,
         ctx.content_key,
+        clipboard,
+        event_rx,
     )
     .await
 }
@@ -243,6 +249,69 @@ pub fn history_item_text(entry_id: &str) -> Result<Option<String>> {
         .into_iter()
         .find(|it| it.id == id && matches!(it.kind, HistoryKind::Text))
         .map(|it| it.preview))
+}
+
+/// Look up the kind of a single history row (text / image / bundle).
+/// Used by the GUI's unified `cmd_copy_history_item` to dispatch.
+/// Returns `Ok(None)` if no such id exists.
+pub fn history_item_kind(entry_id: &str) -> Result<Option<HistoryKind>> {
+    let id = Uuid::parse_str(entry_id).context("parsing history id")?;
+    let history = open_history_best_effort()?;
+    let items = history.list(history::DEFAULT_MAX_ITEMS)?;
+    Ok(items.into_iter().find(|it| it.id == id).map(|it| it.kind))
+}
+
+/// Look up an image-history row and return the decoded RGBA bytes
+/// ready for `ClipboardCmd::WriteImage`. Returns `Ok(None)` if the row
+/// isn't an image, or if the backing `.enc` file is missing (pre-v0.2.1
+/// rows, or a retention-sweep race). Returns `Err` on malformed
+/// ciphertext / wrong key.
+pub fn history_item_image(entry_id: &str) -> Result<Option<crate::clipboard::ImageBytes>> {
+    let id = Uuid::parse_str(entry_id).context("parsing history id")?;
+    let history = open_history_best_effort()?;
+    // Confirm the row exists and is an image row — callers pass any id
+    // here and we want to fail clearly if it's text/bundle.
+    let items = history.list(history::DEFAULT_MAX_ITEMS)?;
+    let row_is_image = items
+        .iter()
+        .any(|it| it.id == id && matches!(it.kind, HistoryKind::Image));
+    if !row_is_image {
+        return Ok(None);
+    }
+    let Some(store) = history.image_store() else {
+        return Ok(None);
+    };
+    let Some(png_bytes) = store.get(id)? else {
+        return Ok(None);
+    };
+    let image = crate::image_codec::decode_png(&png_bytes)?;
+    Ok(Some(image))
+}
+
+/// Look up a bundle row and resolve its top-level inbox entries so the
+/// caller can push them onto the OS file clipboard. Returns `Ok(None)`
+/// if the row isn't a bundle or if the inbox folder is missing
+/// (user manually deleted, or a pre-history-retention-cleanup row from
+/// a prior version that's been swept).
+pub fn history_item_bundle_paths(entry_id: &str) -> Result<Option<Vec<PathBuf>>> {
+    let id = Uuid::parse_str(entry_id).context("parsing history id")?;
+    let history = open_history_best_effort()?;
+    let items = history.list(history::DEFAULT_MAX_ITEMS)?;
+    let row_is_bundle = items
+        .iter()
+        .any(|it| it.id == id && matches!(it.kind, HistoryKind::Bundle));
+    if !row_is_bundle {
+        return Ok(None);
+    }
+    let dir = files::inbox_dir().join(id.to_string());
+    if !dir.exists() {
+        return Ok(None);
+    }
+    let paths = files::top_level_entries(&dir)?;
+    if paths.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(paths))
 }
 
 /// Open the history DB with the preview cipher if the keychain has a

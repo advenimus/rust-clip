@@ -28,7 +28,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    clipboard::{self, ClipEvent, ClipboardHandle},
+    clipboard::{ClipEvent, ClipboardHandle},
     config::ClientConfig,
     crypto::Cipher,
     files::{self, FileBundle, PackError},
@@ -47,6 +47,8 @@ pub async fn run(
     device_token: String,
     device_id: Uuid,
     content_key: Zeroizing<[u8; 32]>,
+    clipboard: ClipboardHandle,
+    mut event_rx: mpsc::Receiver<ClipEvent>,
 ) -> Result<()> {
     let ws_url = http_to_ws(&server_url)?;
     // Key is cloned into XChaCha20Poly1305 which ZeroizeOnDrop's its
@@ -56,12 +58,7 @@ pub async fn run(
     let rest = ServerClient::new(&server_url)?;
     let history = Arc::new(Mutex::new(History::open_default_with_key(&content_key)?));
 
-    let (event_tx, event_rx) = mpsc::channel::<ClipEvent>(64);
-    let clipboard = clipboard::spawn_watcher(event_tx)?;
-    info!("clipboard watcher started");
-
     let mut backoff = RECONNECT_INITIAL;
-    let mut event_rx = event_rx;
     let mut seen = SeenEvents::new(SEEN_EVENTS_CAPACITY);
     loop {
         match session(
@@ -201,8 +198,17 @@ async fn session(
 /// decrypted metadata separate from the wire event.
 pub enum OutgoingPreview {
     Text(String),
-    Image { width: usize, height: usize },
-    Bundle { summary: String },
+    /// PNG bytes ride along so `record_outgoing` can best-effort stash
+    /// them in the `ImageHistoryStore` — letting the user re-copy past
+    /// images from the History window.
+    Image {
+        width: usize,
+        height: usize,
+        png_bytes: Vec<u8>,
+    },
+    Bundle {
+        summary: String,
+    },
 }
 
 /// Build the on-wire event for one locally-detected clip.
@@ -250,7 +256,14 @@ async fn build_outgoing(
                 MIME_PNG,
             )
             .await?;
-            Ok(Some((msg, OutgoingPreview::Image { width, height })))
+            Ok(Some((
+                msg,
+                OutgoingPreview::Image {
+                    width,
+                    height,
+                    png_bytes,
+                },
+            )))
         }
         ClipEvent::Files(paths) => {
             let cap = ClientConfig::load().unwrap_or_default().auto_sync_max_bytes;
@@ -385,22 +398,55 @@ fn record_outgoing(
     event: &ClipEventMessage,
     preview: &OutgoingPreview,
 ) -> Result<()> {
-    let mut h = history
-        .lock()
-        .map_err(|_| anyhow!("history mutex poisoned"))?;
-    match preview {
-        OutgoingPreview::Text(text) => h.record_text(Direction::Outgoing, text, event.id),
-        OutgoingPreview::Image { width, height } => h.record_image(
-            Direction::Outgoing,
-            *width as u32,
-            *height as u32,
-            event.size_bytes,
-            event.id,
-        ),
-        OutgoingPreview::Bundle { summary } => {
-            h.record_bundle(Direction::Outgoing, summary, event.size_bytes, event.id)
+    // Clone the (cheap) image store out while we briefly hold the
+    // lock, so the actual disk write happens after the mutex is
+    // dropped. Under the lock we only touch SQLite which is fast.
+    let image_bytes_to_persist: Option<(
+        uuid::Uuid,
+        Vec<u8>,
+        crate::image_history::ImageHistoryStore,
+    )> = {
+        let mut h = history
+            .lock()
+            .map_err(|_| anyhow!("history mutex poisoned"))?;
+        match preview {
+            OutgoingPreview::Text(text) => {
+                h.record_text(Direction::Outgoing, text, event.id)?;
+                None
+            }
+            OutgoingPreview::Image {
+                width,
+                height,
+                png_bytes,
+            } => {
+                h.record_image(
+                    Direction::Outgoing,
+                    *width as u32,
+                    *height as u32,
+                    event.size_bytes,
+                    event.id,
+                )?;
+                h.image_store()
+                    .cloned()
+                    .map(|store| (event.id, png_bytes.clone(), store))
+            }
+            OutgoingPreview::Bundle { summary } => {
+                h.record_bundle(Direction::Outgoing, summary, event.size_bytes, event.id)?;
+                None
+            }
+        }
+    };
+
+    if let Some((id, bytes, store)) = image_bytes_to_persist {
+        // Best-effort: failing to stash the image means the user can't
+        // re-copy it from history later, but the clip itself already
+        // went out over the wire. Don't bounce the error upstream.
+        if let Err(e) = store.put(id, &bytes) {
+            warn!(event_id = %id, error = %e, "persisting outgoing image to history store");
         }
     }
+
+    Ok(())
 }
 
 /// Build and send a single clip event via a short-lived WS connection.
@@ -614,7 +660,10 @@ async fn apply_incoming(
                 "received image clip"
             );
             clipboard.write_image(image)?;
-            if let Ok(mut h) = history.lock() {
+            // Clone the image store out under the short lock, then
+            // write the encrypted PNG to disk afterwards so the lock
+            // doesn't cover disk I/O.
+            let image_store_clone = if let Ok(mut h) = history.lock() {
                 let _ = h.record_image(
                     Direction::Incoming,
                     width as u32,
@@ -622,6 +671,14 @@ async fn apply_incoming(
                     event.size_bytes,
                     event.id,
                 );
+                h.image_store().cloned()
+            } else {
+                None
+            };
+            if let Some(store) = image_store_clone {
+                if let Err(e) = store.put(event.id, &plaintext) {
+                    warn!(event_id = %event.id, error = %e, "persisting incoming image to history store");
+                }
             }
         }
         MIME_BUNDLE => {

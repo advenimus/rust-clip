@@ -16,5 +16,6 @@ pub mod gui_api;
 pub mod history;
 pub mod http;
 pub mod image_codec;
+pub mod image_history;
 pub mod keychain;
 pub mod sync;

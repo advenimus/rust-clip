@@ -288,14 +288,14 @@
                 <span class="preview" title="${escapeHtml(it.preview)}">${escapeHtml(it.preview)}</span>
                 <span class="size">${formatBytes(it.size_bytes)}</span>
                 <span class="when">${escapeHtml(when)}</span>
-                <button class="btn btn-ghost row-copy" data-id="${it.id}" ${it.kind === 'text' ? '' : 'disabled'}>Copy</button>
+                <button class="btn btn-ghost row-copy" data-id="${it.id}" data-kind="${it.kind}">Copy</button>
               </div>`;
           })
           .join('');
         historyList.querySelectorAll('.row-copy').forEach((btn) => {
           btn.addEventListener('click', async () => {
             try {
-              await invoke('cmd_copy_history_text', { entryId: btn.dataset.id });
+              await invoke('cmd_copy_history_item', { entryId: btn.dataset.id });
             } catch (err) {
               await alertDialog(String(err));
             }

@@ -197,8 +197,19 @@ async fn dispatch(app: &AppHandle, id: &str) -> Result<()> {
         other if other.starts_with("history-copy::") => {
             let id = other.trim_start_matches("history-copy::");
             if let Some(text) = rustclip_client::gui_api::history_item_text(id)? {
-                let mut cb = arboard::Clipboard::new()?;
-                cb.set_text(text)?;
+                // Route through the clipboard worker so the sync
+                // daemon's echo hashes update and we don't re-broadcast
+                // the recopy to other devices. Fall back to a fresh
+                // arboard if sync isn't running — no worker to
+                // re-broadcast from in that case anyway.
+                let state: tauri::State<'_, AppState> = app.state();
+                let handle_opt = state.lock().await.sync.clipboard();
+                if let Some(handle) = handle_opt {
+                    handle.write_text(text)?;
+                } else {
+                    let mut cb = arboard::Clipboard::new()?;
+                    cb.set_text(text)?;
+                }
             }
         }
         _ => {}

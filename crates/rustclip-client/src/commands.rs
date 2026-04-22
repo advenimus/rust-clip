@@ -174,11 +174,15 @@ pub async fn sync_cmd() -> Result<()> {
     // Drop (for secret zeroization) so we can't move individual
     // fields. The .clone() allocates new String buffers; the
     // originals are wiped when `creds` goes out of scope.
+    let (event_tx, event_rx) = tokio::sync::mpsc::channel(64);
+    let clipboard = crate::clipboard::spawn_watcher(event_tx)?;
     sync::run(
         creds.server_url.clone(),
         creds.device_token.clone(),
         device_id,
         content_key,
+        clipboard,
+        event_rx,
     )
     .await
 }
