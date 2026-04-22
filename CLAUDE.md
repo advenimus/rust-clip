@@ -24,15 +24,15 @@ rust-clip/
 │   ├── operator-guide.md        env vars, deployment, deferrals
 │   └── threat-model.md          what we guarantee, what we don't
 ├── .github/workflows/
-│   ├── ci.yml                   fmt, clippy, tests, cargo-audit
-│   ├── server-image.yml         GHCR Docker image build + push
-│   └── client-release.yml       multi-platform binary builds for v* tags
+│   ├── ci.yml                   fmt, clippy, tests, cargo-audit (every push/PR)
+│   ├── server-image.yml         Docker image → GHCR (+ Docker Hub if secrets set), v* tags only
+│   └── client-release.yml       tauri-action bundles .dmg/.msi/.AppImage/.deb, auto-publishes Latest, v* tags only
 └── CLAUDE.md                    this file
 ```
 
 ## Build history (phase summary)
 
-All 10 phases are on `main`. Commits intentionally follow `feat: Phase N <topic>` so git log reads as a build log.
+All phases are on `main`. Commits intentionally follow `feat: Phase N <topic>` so git log reads as a build log. First shipped release is `v0.1.1` at https://github.com/advenimus/rust-clip/releases/latest.
 
 | Phase | What shipped |
 |---|---|
@@ -45,8 +45,10 @@ All 10 phases are on `main`. Commits intentionally follow `feat: Phase N <topic>
 | 6 | Local clipboard history. Per-device rusqlite DB at `$DATA_LOCAL_DIR/rustclip/history.db`. 100-item / 7-day retention. `history` / `history-clear` CLI. |
 | 7 | Admin portal breadth. Runtime settings store backed by the `settings` table with env fallbacks, live-editable via `/admin/settings`. Audit log gets event-type + date-range filters and CSV export at `/admin/audit-log.csv`. Sweeper prunes audit rows per retention. Dashboard adds clip-event counts (24h/7d) and blob-storage total. Device revoke flows through a named-flash banner. |
 | 8 | Hardening. In-process token-bucket rate limiter scoped to `/admin/login` and `/api/v1/auth/*` (the regression test `blob_uploads_not_throttled_by_auth_limiter` pins the scope). Per-WS-connection event bucket (30/10s). `RUSTCLIP_LOG_FORMAT=json` toggle. SIGTERM/Ctrl-C graceful shutdown with `PRAGMA wal_checkpoint(TRUNCATE)`. CSP + Referrer-Policy + X-Frame-Options + X-Content-Type-Options on admin HTML. Client reconnect backoff with ±25% jitter. Threat model doc. |
-| 9 | Distribution CI. `.github/workflows/server-image.yml` pushes to GHCR on main + tags. `.github/workflows/client-release.yml` builds CLI + GUI for macOS x86_64, macOS aarch64, Linux x86_64, Windows x86_64 on `v*` tags and attaches archives to a draft GitHub Release. `cargo audit` job added to CI. |
+| 9 | Distribution CI. Scaffolded `server-image.yml` + `client-release.yml`. Both were substantially reworked during release hardening (see Phase 11). `cargo audit` job added to CI. |
 | 10 | Tauri v2 desktop UI. `rustclip-client` split into lib + CLI bin. New `rustclip-client-gui` crate with a tray icon, Account window (enroll/login/logout), History window (list/recopy/clear), embedded sync daemon via `SyncRunner`, autostart plugin, menu-bar-only on macOS (`ActivationPolicy::Accessory`). |
+| 10.5 | Server observability + GUI polish (commit `77f8ab1`). Auto-start sync after in-app enroll/login. New `history_watcher` module polls the local history DB every 2s, emits `history-updated` Tauri events + `tauri-plugin-notification` toasts on incoming clips. Hand-rolled `/metrics` Prometheus endpoint on the server (`MetricsHub` with atomic counters + DB-queried gauges). |
+| 11 | Release shipping. Switched `client-release.yml` to `tauri-apps/tauri-action` so it produces proper installers (`.dmg`, `.msi`, NSIS `.exe`, `.AppImage`, `.deb`, `.rpm`) plus CLI archives — no more raw binaries. Matrix is macOS aarch64 + Linux x86_64 + Windows x86_64 (no Intel Mac — see memory). Both release workflows are **v\* tags only** now (not every push to main). Release is auto-published + marked Latest via `make_latest: "true"`. Docker Hub publishing is optional — gated on `DOCKERHUB_USERNAME` / `DOCKERHUB_TOKEN` secrets, falls back to GHCR-only if unset. `cargo audit` ignores `RUSTSEC-2023-0071` (rsa via `sqlx-macros-core` at compile time, SQLite-only build so not reachable). First shipped tag is `v0.1.1` (v0.1.0 had the wrong app icon — blank placeholder — fixed by regenerating all variants from `icons/logo-color.png`). |
 
 ## Architecture deep-dives
 
@@ -81,6 +83,23 @@ All 10 phases are on `main`. Commits intentionally follow `feat: Phase N <topic>
 - `rustclip-client-gui` is a Tauri v2 app that depends on the library. The sync daemon runs in a tokio task supervised by `SyncRunner` (one `JoinHandle` behind a mutex, status emitted via Tauri events). Closing any window hides it; the tray keeps the daemon alive. On macOS, `app.set_activation_policy(ActivationPolicy::Accessory)` in `setup()` hides the app from the dock — it's menu-bar only.
 - **Tray menu:** status line (Connected/Offline/Error/Not enrolled) → Recent clips submenu (last 10 text items, click to re-copy) → Account / History window links → Start/Stop sync → Quit.
 
+### Release pipeline
+
+- **Trigger model:** artifact workflows (`server-image.yml`, `client-release.yml`) fire **only on `v*` tags**. CI (`ci.yml`) runs on every push to `main` and every PR — tests, not artifacts. Result: nothing ships until a version tag is pushed.
+- **Server image:** `docker/Dockerfile` → pushed to `ghcr.io/advenimus/rustclip-server:{version,major.minor,latest}`. Docker Hub push (`docker.io/<user>/rustclip-server:...`) is conditional on `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` being set as repo secrets; workflow step `Detect Docker Hub secret` short-circuits cleanly when they're not.
+- **Client release:** `tauri-apps/tauri-action@v0` builds + bundles. Matrix:
+  - `macos-14` (Apple Silicon) → `.dmg` + `.app.tar.gz`
+  - `ubuntu-22.04` → `.AppImage` + `.deb` + `.rpm`
+  - `windows-latest` → `.msi` + NSIS `-setup.exe`
+  After tauri-action finishes, a second `softprops/action-gh-release@v2` step packages the raw CLI binary into a per-platform `rustclip-cli-*` archive and attaches it to the same release. `draft: false` + `make_latest: "true"` means the release lands live and becomes Latest automatically.
+- **Cutting a release:**
+  ```bash
+  # Bump workspace version in Cargo.toml AND tauri.conf.json, then:
+  git tag v0.1.x
+  git push origin v0.1.x
+  ```
+- **Known caveat:** bundles are **unsigned** — Gatekeeper (macOS) and SmartScreen (Windows) will warn. macOS workaround: `xattr -d com.apple.quarantine /Applications/RustClip.app`. Signing/notarization still needs repo secrets (deferrals list below).
+
 ## How to run things
 
 ### Server
@@ -91,8 +110,11 @@ RUSTCLIP_ADMIN_USERNAME=admin RUSTCLIP_ADMIN_PASSWORD=please-change-me \
   cargo run -p rustclip-server
 # => admin portal at http://127.0.0.1:8080/admin
 
-# Docker (production shape)
+# Docker (production shape, build locally)
 docker compose -f docker/docker-compose.yml up -d --build
+
+# Docker (pull the published image instead of building)
+docker pull ghcr.io/advenimus/rustclip-server:latest
 ```
 
 Env vars documented in `docs/operator-guide.md`. Defaults are sane; the ones you'll touch are `RUSTCLIP_ADMIN_USERNAME`, `RUSTCLIP_ADMIN_PASSWORD`, `RUSTCLIP_PUBLIC_URL`, and the `/data` volume mount.
@@ -113,6 +135,8 @@ cargo run -p rustclip-client -- logout
 
 Non-interactive flags for scripting: `--enrollment-token`, `--password` (also reads from `RUSTCLIP_PASSWORD` env).
 
+**Install from a GitHub Release** (end-user path): grab the platform-native installer from https://github.com/advenimus/rust-clip/releases/latest — `.dmg` (macOS), `.msi` or NSIS `-setup.exe` (Windows), `.AppImage` / `.deb` / `.rpm` (Linux). Also attached: `rustclip-cli-*` archives with just the CLI binary.
+
 ### Tests and checks
 
 ```bash
@@ -121,7 +145,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo fmt --all --check
 ```
 
-Current state: 54 tests passing (16 client + 35 server + 3 shared). CI runs the same three commands plus `cargo audit`.
+Current state: 57 tests passing (16 client + 38 server + 3 shared). CI runs the same three commands plus `cargo audit` (ignoring `RUSTSEC-2023-0071` — justified in `.github/workflows/ci.yml`).
 
 ## Design decisions that aren't obvious from the code
 
@@ -132,16 +156,20 @@ Current state: 54 tests passing (16 client + 35 server + 3 shared). CI runs the 
 - **Rate limiter scope matters.** During Phase 8 I initially wrapped the whole `/admin` and `/api/v1` trees with the auth limiter; the advisor caught that this would throttle blob uploads and admin actions. The fix scopes the middleware to just `/admin/login` and `/api/v1/auth/*`, and the regression test `blob_uploads_not_throttled_by_auth_limiter` pins it.
 - **Menu-bar-only on macOS.** `ActivationPolicy::Accessory` is set in `setup()` — no dock tile, no application menu. Tray keeps the daemon alive.
 - **File sync scope for Phase 5.** Receive-and-paste works on macOS. Detecting an OS-native file copy on the sending side (`NSFilenamesPboardType`, `CF_HDROP`, `text/uri-list`) is deferred — for now users either use `send-files` from the CLI or drop files into the tray (future). See `docs/architectural_decisions.md` deviation note if you're reading this from a worktree where that exists; otherwise the memory system has the trail.
+- **No Intel Mac in the release matrix.** `macos-13` runners queue 15+ minutes under load and modern Macs are all Apple Silicon. The v0.1.0 tag attempt had all three other platforms finish while Intel Mac sat queued — we cut it from the matrix rather than wait. If Intel Mac is ever requested, cross-compile from `macos-14` via `--target x86_64-apple-darwin` instead of re-adding `macos-13`.
+- **Tauri config `version` is manually synced.** `tauri.conf.json` hardcodes `"version"` rather than reading from `Cargo.toml` — simpler and reliable. Bumping a release means editing **both** `Cargo.toml` (workspace) and `crates/rustclip-client-gui/tauri.conf.json`.
+- **App icon source is `icons/logo-color.png`, not `icon.png`.** A placeholder `icon.png` shipped with v0.1.0 and gave the DMG a blank orange square. Regenerating must use `cargo tauri icon crates/rustclip-client-gui/icons/logo-color.png` (or first `cp logo-color.png icon.png` then run `cargo tauri icon icons/icon.png`). Always delete the `icons/ios/`, `icons/android/`, and `Square*Logo.png` / `StoreLogo.png` artifacts afterwards — desktop-only project.
+- **`cargo audit` ignores `RUSTSEC-2023-0071`.** `rsa 0.9.x` Marvin Attack is pulled by `sqlx-macros-core` at compile time for MySQL type introspection. rustclip-server only speaks SQLite, so `rsa` never ships in the release binary. Ignored in `.github/workflows/ci.yml` with justification; revisit if sqlx publishes a fix.
 
 ## Known deferrals (not in any phase)
 
 - OS clipboard-watcher file detection on the sending side (so copying files in Finder/Explorer auto-syncs them without using `send-files`).
-- Apple Developer ID signing + notarization in the release workflow. The plumbing is ready; needs repo secrets wired (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `CSC_LINK`, `CSC_KEY_PASSWORD`). Team ID `JBTB5G7DRQ` is reused from the user's other project (Conduit).
+- Apple Developer ID signing + notarization in the release workflow. The plumbing is ready in `tauri-action`; needs repo secrets wired (`APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, `APPLE_TEAM_ID`, `CSC_LINK`, `CSC_KEY_PASSWORD`). Team ID `JBTB5G7DRQ` is reused from the user's other project (Conduit).
 - Windows code-signing (needs an EV or standard code-signing cert).
-- Linux aarch64 client build. Dropped from the v1 matrix because `arboard` needs multi-arch xcb headers that aren't set up in the current workflow.
-- Linux packaging beyond a plain `.tar.gz` (AppImage / `.deb` / Flatpak).
-- `/metrics` Prometheus exporter on the server.
-- Toast notifications for incoming clips from the tray app (plugin is wired, just not emitted yet).
+- Docker Hub publishing — workflow is wired, waiting on `DOCKERHUB_USERNAME` + `DOCKERHUB_TOKEN` repo secrets. Without them, server image only lands on GHCR.
+- Intel Mac (x86_64-apple-darwin) builds. Deliberate non-goal — see "Design decisions".
+- Linux aarch64 client build. Not in the v1 matrix; needs multi-arch xcb headers in the runner.
+- Multi-arch Docker image (`linux/arm64`). Currently `linux/amd64` only; QEMU build would add ~20 min.
 - Tray-app preference to require password re-entry on unlock (to purge the content key from memory between sessions).
 
 ## Where to look for things
