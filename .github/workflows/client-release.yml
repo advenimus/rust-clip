@@ -15,10 +15,10 @@ jobs:
       fail-fast: false
       matrix:
         platform:
-          - label: macos-x86_64
-            runner: macos-13
-            rust-target: x86_64-apple-darwin
-            tauri-args: --target x86_64-apple-darwin
+          # macos-13 (Intel) runners queue for 15+ min; the vast majority of
+          # Macs in use today are Apple Silicon, so macos-aarch64 is the
+          # target we ship. Intel Mac support can be added back later via
+          # cross-compile if demand materialises.
           - label: macos-aarch64
             runner: macos-14
             rust-target: aarch64-apple-darwin
