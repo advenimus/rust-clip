@@ -43,7 +43,7 @@
       "endpoints": [
         "https://github.com/advenimus/rust-clip/releases/latest/download/latest.json"
       ],
-      "pubkey": "REPLACE_ME_WITH_GENERATED_PUBKEY",
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDY0ODEzMzU2NTI5QzJCMUMKUldRY0s1eFNWak9CWkRjRjdoV3pUSHhaVitWMmd6Ym1tMTMvOThjdmo3Q3Zja0pNVXcwamtYSk4K",
       "windows": {
         "installMode": "passive"
       }
