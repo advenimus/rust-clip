@@ -187,13 +187,8 @@ pub async fn login(
     .await?;
 
     let row = row.ok_or_else(|| ApiError::unauthorized("invalid username or password"))?;
-    if row.disabled_at.is_some() {
-        return Err(ApiError::unauthorized("account is disabled"));
-    }
-    if row.password_hash.is_empty() {
-        return Err(ApiError::unauthorized(
-            "account has not been enrolled yet; use the enrollment token",
-        ));
+    if row.disabled_at.is_some() || row.password_hash.is_empty() {
+        return Err(ApiError::unauthorized("invalid username or password"));
     }
     let ok = verify_password(&req.password, &row.password_hash).unwrap_or(false);
     if !ok {

@@ -1,4 +1,5 @@
 use axum::{Router, extract::State, response::Response, routing::any};
+use rustclip_shared::protocol::WS_SUBPROTOCOL;
 
 use crate::{api::device_auth::DeviceAuth, state::AppState, ws::session::run};
 
@@ -19,5 +20,10 @@ async fn ws_upgrade(
     auth: DeviceAuth,
     ws: axum::extract::WebSocketUpgrade,
 ) -> Response {
-    ws.on_upgrade(move |socket| run(socket, state, auth))
+    // If the client asks for `rustclip.v1` we accept and echo it back;
+    // clients that send no `Sec-WebSocket-Protocol` still upgrade (for
+    // back-compat with the pre-negotiation client). Future major-version
+    // bumps can tighten this to require a match.
+    ws.protocols([WS_SUBPROTOCOL])
+        .on_upgrade(move |socket| run(socket, state, auth))
 }

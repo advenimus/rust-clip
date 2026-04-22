@@ -86,6 +86,10 @@ pub async fn submit(
     };
 
     session
+        .cycle_id()
+        .await
+        .map_err(|e| AppError::Session(e.to_string()))?;
+    session
         .insert(ADMIN_USER_KEY, user_id)
         .await
         .map_err(|e| AppError::Session(e.to_string()))?;

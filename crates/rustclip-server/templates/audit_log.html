@@ -32,7 +32,7 @@
     <div class="form-actions">
       <button type="submit" class="btn btn-primary">Filter</button>
       <a href="/admin/audit-log" class="btn btn-ghost">Reset</a>
-      <a href="/admin/audit-log.csv{% if csv_query_string.is_empty() %}{% else %}?{{ csv_query_string|safe }}{% endif %}" class="btn btn-ghost">Export CSV</a>
+      <a href="/admin/audit-log.csv{% if csv_query_string.is_empty() %}{% else %}?{{ csv_query_string }}{% endif %}" class="btn btn-ghost">Export CSV</a>
     </div>
   </form>
   {% if rows.is_empty() %}
@@ -60,7 +60,7 @@
     </table>
     <nav class="pager">
       {% if has_next %}
-        <a class="btn btn-ghost" href="/admin/audit-log?before={{ next_cursor.unwrap_or(0) }}{% if query_string.is_empty() %}{% else %}&{{ query_string|safe }}{% endif %}">Older</a>
+        <a class="btn btn-ghost" href="/admin/audit-log?before={{ next_cursor.unwrap_or(0) }}{% if query_string.is_empty() %}{% else %}&{{ query_string }}{% endif %}">Older</a>
       {% endif %}
     </nav>
   {% endif %}

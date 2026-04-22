@@ -15,7 +15,7 @@ use rustclip_shared::{
     MAX_INLINE_CIPHERTEXT_BYTES, PROTOCOL_VERSION,
     protocol::{
         ClientMessage, ClipEventMessage, ContentRef, MIME_BUNDLE, MIME_PNG, MIME_TEXT,
-        ServerMessage,
+        ServerMessage, WS_SUBPROTOCOL,
     },
 };
 use tokio::sync::mpsc;
@@ -119,6 +119,10 @@ async fn session(
     let bearer = HeaderValue::from_str(&format!("Bearer {device_token}"))
         .context("invalid device token for header")?;
     request.headers_mut().insert("authorization", bearer);
+    request.headers_mut().insert(
+        "sec-websocket-protocol",
+        HeaderValue::from_static(WS_SUBPROTOCOL),
+    );
 
     debug!(url = ws_url, "connecting ws");
     let (stream, _response) = tokio_tungstenite::connect_async(request)
@@ -493,9 +497,23 @@ async fn apply_incoming(
         ContentRef::Blob {
             blob_id,
             nonce_b64,
-            sha256_hex: _,
+            sha256_hex,
         } => {
             let ct = rest.download_blob(device_token, blob_id).await?;
+            // Verify the blob matches the hash recorded in the event before
+            // handing it to the AEAD. If the server (or something on disk)
+            // swapped the backing file, we abort here instead of letting the
+            // attacker probe decryption behavior for same-key ciphertexts.
+            use sha2::{Digest, Sha256};
+            let actual = hex::encode(Sha256::digest(&ct));
+            if !sha256_eq(&actual, &sha256_hex) {
+                return Err(anyhow!(
+                    "blob {} hash mismatch (event wanted {}, disk has {})",
+                    blob_id,
+                    sha256_hex,
+                    actual
+                ));
+            }
             let nn = BASE64
                 .decode(nonce_b64.as_bytes())
                 .map_err(|_| anyhow!("nonce not base64"))?;
@@ -570,6 +588,13 @@ async fn apply_incoming(
         }
     }
     Ok(())
+}
+
+/// Case-insensitive hex compare. The hash isn't a secret so constant-time
+/// is unnecessary, but we normalize because different sha2 versions have
+/// emitted both cases at different times.
+fn sha256_eq(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
 }
 
 fn summarize_incoming_bundle(paths: &[std::path::PathBuf]) -> String {

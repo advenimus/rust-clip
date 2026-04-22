@@ -24,6 +24,7 @@ use std::{env, sync::Arc};
 use anyhow::{Context, Result};
 use axum::{
     Router,
+    extract::DefaultBodyLimit,
     http::{StatusCode, header},
     response::IntoResponse,
     routing::get,
@@ -31,7 +32,8 @@ use axum::{
 use tokio::net::TcpListener;
 use tower::Layer;
 use tower_http::{
-    normalize_path::NormalizePathLayer, set_header::SetResponseHeaderLayer, trace::TraceLayer,
+    limit::RequestBodyLimitLayer, normalize_path::NormalizePathLayer,
+    set_header::SetResponseHeaderLayer, trace::TraceLayer,
 };
 use tower_sessions::{Expiry, SessionManagerLayer, cookie::SameSite};
 use tower_sessions_sqlx_store::SqliteStore;
@@ -111,14 +113,16 @@ async fn main() -> Result<()> {
             axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"),
         ))
         .layer(SetResponseHeaderLayer::overriding(
-            header::X_CONTENT_TYPE_OPTIONS,
-            axum::http::HeaderValue::from_static("nosniff"),
-        ))
-        .layer(SetResponseHeaderLayer::overriding(
             header::X_FRAME_OPTIONS,
             axum::http::HeaderValue::from_static("DENY"),
         ));
-    let api_router = api::router(state.auth_limiter.clone());
+    // Per-sub-router body-size wall: blob uploads get 1 GiB (override inside
+    // the blob router), every other route gets 1 MiB. Enforced before the
+    // body is buffered, so oversized admin-form / auth-API posts are rejected
+    // at the network edge, not after the sqlx-layer parses them.
+    const SMALL_BODY_LIMIT: usize = 1024 * 1024;
+    let api_router =
+        api::router(state.auth_limiter.clone()).layer(DefaultBodyLimit::max(SMALL_BODY_LIMIT));
 
     let pool_for_shutdown = state.db.clone();
     let app = Router::new()
@@ -128,12 +132,20 @@ async fn main() -> Result<()> {
         .route("/static/admin.js", get(serve_admin_js))
         .route("/static/logo.png", get(serve_logo_png))
         .route("/static/logo-light.png", get(serve_logo_light_png))
-        .nest("/admin", admin_router)
+        .nest("/admin", admin_router.layer(DefaultBodyLimit::max(SMALL_BODY_LIMIT)))
         .nest("/api/v1", api_router)
         .nest("/ws", ws::router())
         .with_state(state)
         .layer(session_layer)
-        .layer(TraceLayer::new_for_http());
+        .layer(TraceLayer::new_for_http())
+        // nosniff covers every response, not just admin HTML.
+        .layer(SetResponseHeaderLayer::overriding(
+            header::X_CONTENT_TYPE_OPTIONS,
+            axum::http::HeaderValue::from_static("nosniff"),
+        ))
+        // Top-level wall so an attacker cannot POST gigabytes at /healthz or
+        // any unrouted path. Blob uploads override this inside the blob router.
+        .layer(RequestBodyLimitLayer::new(api::blobs::BLOB_BODY_LIMIT));
 
     // Trim trailing slashes so /admin/ and /admin match the same route.
     let service = NormalizePathLayer::trim_trailing_slash().layer(app);

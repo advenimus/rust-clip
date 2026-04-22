@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use axum::{
     Json, Router,
     body::Body,
-    extract::{Path, State},
+    extract::{DefaultBodyLimit, Path, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -30,10 +30,18 @@ use uuid::Uuid;
 
 use crate::{api::ApiError, api::device_auth::DeviceAuth, db::now_millis, state::AppState};
 
+/// Hard upper bound on blob upload body size (also ceils the
+/// settings-configurable `max_payload_bytes`). 1 GiB.
+pub const BLOB_BODY_LIMIT: usize = 1024 * 1024 * 1024;
+
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/", post(upload))
         .route("/{blob_id}", get(download).delete(remove))
+        // Override the api-level default (1 MiB) — the handler still enforces
+        // the runtime `max_payload_bytes` cap on its own. This layer is purely
+        // the preflight wall so axum doesn't buffer more than 1 GiB into RAM.
+        .layer(DefaultBodyLimit::max(BLOB_BODY_LIMIT))
 }
 
 async fn upload(
