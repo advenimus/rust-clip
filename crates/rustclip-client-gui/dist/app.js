@@ -36,6 +36,24 @@
     }
     const { invoke } = tauri.core;
     const { listen } = tauri.event;
+    // Tauri v2's WKWebView on macOS does not wire up native window.confirm /
+    // window.alert — calls silently return falsy. Route through the dialog
+    // plugin so destructive actions and error surfaces actually render.
+    const dialog = tauri.dialog ?? (window.__TAURI__ && window.__TAURI__.dialog);
+
+    async function confirmDialog(message, title = 'RustClip') {
+      if (dialog && typeof dialog.confirm === 'function') {
+        return dialog.confirm(message, { title, kind: 'warning' });
+      }
+      return window.confirm(message);
+    }
+
+    async function alertDialog(message, title = 'RustClip') {
+      if (dialog && typeof dialog.message === 'function') {
+        return dialog.message(message, { title, kind: 'error' });
+      }
+      window.alert(message);
+    }
 
     window.addEventListener('error', (ev) => {
       showBootError('Script error: ' + (ev.error?.stack || ev.message || ev.type));
@@ -46,16 +64,19 @@
 
     const panelAccount = document.getElementById('panel-account');
     const panelHistory = document.getElementById('panel-history');
+    const panelSettings = document.getElementById('panel-settings');
     const panelAbout = document.getElementById('panel-about');
     const tabs = document.querySelectorAll('.tabs a');
 
     function showPanel(name) {
       panelAccount.classList.toggle('hidden', name !== 'account');
       panelHistory.classList.toggle('hidden', name !== 'history');
+      panelSettings.classList.toggle('hidden', name !== 'settings');
       panelAbout.classList.toggle('hidden', name !== 'about');
       tabs.forEach((a) => a.classList.toggle('active', a.dataset.tab === name));
       if (name === 'account') refreshAccount();
       if (name === 'history') refreshHistory();
+      if (name === 'settings') refreshSettings();
       if (name === 'about') refreshAbout();
     }
 
@@ -81,7 +102,6 @@
     const accountStatus = document.getElementById('account-status');
     const accountMsg = document.getElementById('account-msg');
     const authForms = document.getElementById('auth-forms');
-    const autostartToggle = document.getElementById('autostart-toggle');
 
     modeEnroll.addEventListener('click', () => {
       formEnroll.classList.remove('hidden');
@@ -138,50 +158,6 @@
       }
     });
 
-    autostartToggle.addEventListener('change', async () => {
-      try {
-        await invoke('cmd_set_autostart', { enable: autostartToggle.checked });
-      } catch (err) {
-        setMsg(String(err), 'err');
-      }
-    });
-
-    const autoSyncFilesToggle = document.getElementById('auto-sync-files-toggle');
-    const autoSyncMaxMb = document.getElementById('auto-sync-max-mb');
-    const autoSyncMaxSave = document.getElementById('auto-sync-max-save');
-
-    async function refreshClientConfig() {
-      try {
-        const cfg = await invoke('cmd_get_client_config');
-        autoSyncFilesToggle.checked = !!cfg.auto_sync_files;
-        autoSyncMaxMb.value = Math.max(1, Math.round(cfg.auto_sync_max_bytes / (1024 * 1024)));
-      } catch (err) {
-        setMsg(String(err), 'err');
-      }
-    }
-
-    async function saveClientConfig() {
-      const mb = Math.max(1, parseInt(autoSyncMaxMb.value, 10) || 500);
-      try {
-        const updated = await invoke('cmd_set_client_config', {
-          config: {
-            auto_sync_files: autoSyncFilesToggle.checked,
-            auto_sync_max_bytes: mb * 1024 * 1024,
-          },
-        });
-        autoSyncMaxMb.value = Math.max(1, Math.round(updated.auto_sync_max_bytes / (1024 * 1024)));
-        setMsg('Saved. Restart sync to apply the auto-sync toggle.', 'ok');
-      } catch (err) {
-        setMsg(String(err), 'err');
-      }
-    }
-
-    autoSyncFilesToggle.addEventListener('change', saveClientConfig);
-    autoSyncMaxSave.addEventListener('click', saveClientConfig);
-    autoSyncMaxMb.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
-    });
-
     async function refreshAccount() {
       try {
         const acc = await invoke('cmd_status');
@@ -202,7 +178,7 @@
               </div>
             </div>`;
           document.getElementById('logout-btn').addEventListener('click', async () => {
-            if (!confirm('Log out of this device? This will sign out and clear local keys.')) return;
+            if (!(await confirmDialog('Log out of this device? This will sign out and clear local keys.'))) return;
             try { await invoke('cmd_logout'); setMsg('Logged out.', 'ok'); refreshAccount(); }
             catch (err) { setMsg(String(err), 'err'); }
           });
@@ -218,8 +194,6 @@
           authForms.classList.remove('hidden');
           accountStatus.innerHTML = '';
         }
-        try { autostartToggle.checked = await invoke('cmd_get_autostart'); } catch {}
-        await refreshClientConfig();
       } catch (err) {
         setMsg(String(err), 'err');
       }
@@ -230,13 +204,71 @@
       accountMsg.className = 'status ' + cls;
     }
 
+    // ---- Settings panel ----
+    const autostartToggle = document.getElementById('autostart-toggle');
+    const autoSyncFilesToggle = document.getElementById('auto-sync-files-toggle');
+    const autoSyncMaxMb = document.getElementById('auto-sync-max-mb');
+    const autoSyncMaxSave = document.getElementById('auto-sync-max-save');
+    const notificationsToggle = document.getElementById('notifications-toggle');
+    const settingsMsg = document.getElementById('settings-msg');
+
+    function setSettingsMsg(text, cls = '') {
+      settingsMsg.textContent = text;
+      settingsMsg.className = 'status ' + cls;
+    }
+
+    async function refreshSettings() {
+      try { autostartToggle.checked = await invoke('cmd_get_autostart'); } catch {}
+      try {
+        const cfg = await invoke('cmd_get_client_config');
+        autoSyncFilesToggle.checked = !!cfg.auto_sync_files;
+        autoSyncMaxMb.value = Math.max(1, Math.round(cfg.auto_sync_max_bytes / (1024 * 1024)));
+        notificationsToggle.checked = !!cfg.notifications_enabled;
+      } catch (err) {
+        setSettingsMsg(String(err), 'err');
+      }
+    }
+
+    async function saveClientConfig(okMessage) {
+      const mb = Math.max(1, parseInt(autoSyncMaxMb.value, 10) || 500);
+      try {
+        const updated = await invoke('cmd_set_client_config', {
+          config: {
+            auto_sync_files: autoSyncFilesToggle.checked,
+            auto_sync_max_bytes: mb * 1024 * 1024,
+            notifications_enabled: notificationsToggle.checked,
+          },
+        });
+        autoSyncMaxMb.value = Math.max(1, Math.round(updated.auto_sync_max_bytes / (1024 * 1024)));
+        setSettingsMsg(okMessage || 'Saved.', 'ok');
+      } catch (err) {
+        setSettingsMsg(String(err), 'err');
+      }
+    }
+
+    autostartToggle.addEventListener('change', async () => {
+      try {
+        await invoke('cmd_set_autostart', { enable: autostartToggle.checked });
+        setSettingsMsg('Saved.', 'ok');
+      } catch (err) {
+        setSettingsMsg(String(err), 'err');
+      }
+    });
+    autoSyncFilesToggle.addEventListener('change', () =>
+      saveClientConfig('Saved. Restart sync to apply the auto-sync toggle.'));
+    autoSyncMaxSave.addEventListener('click', () => saveClientConfig());
+    autoSyncMaxMb.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
+    });
+    notificationsToggle.addEventListener('change', () => saveClientConfig());
+
     // ---- History panel ----
     const historyList = document.getElementById('history-list');
     document.getElementById('refresh-history').addEventListener('click', refreshHistory);
     document.getElementById('clear-history').addEventListener('click', async () => {
-      if (!confirm('Clear all local history? This cannot be undone.')) return;
+      if (!(await confirmDialog('Clear all local history? This cannot be undone.'))) return;
       try { await invoke('cmd_clear_history'); refreshHistory(); }
-      catch (err) { alert(String(err)); }
+      catch (err) { await alertDialog(String(err)); }
     });
 
     async function refreshHistory() {
@@ -265,7 +297,7 @@
             try {
               await invoke('cmd_copy_history_text', { entryId: btn.dataset.id });
             } catch (err) {
-              alert(String(err));
+              await alertDialog(String(err));
             }
           });
         });
@@ -325,7 +357,7 @@
       })[trigger.dataset.ext];
       if (!url) return;
       try { await invoke('cmd_open_external', { url }); }
-      catch (err) { alert(String(err)); }
+      catch (err) { await alertDialog(String(err)); }
     });
 
     // ---- Backend events ----
@@ -371,7 +403,7 @@
         link.title = tip;
         link.addEventListener('click', async () => {
           try { await invoke('cmd_open_external', { url: info.release_url }); }
-          catch (err) { alert(String(err)); }
+          catch (err) { await alertDialog(String(err)); }
         });
         updateActions.appendChild(link);
         const note = document.createElement('span');

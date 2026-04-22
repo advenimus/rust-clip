@@ -13,6 +13,7 @@
     "core:webview:default",
     "core:event:default",
     "notification:default",
+    "dialog:default",
     "opener:default",
     "autostart:default"
   ]
