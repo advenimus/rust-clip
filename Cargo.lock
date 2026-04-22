@@ -4430,7 +4430,7 @@ dependencies = [
 
 [[package]]
 name = "rustclip-client"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4471,7 +4471,7 @@ dependencies = [
 
 [[package]]
 name = "rustclip-client-gui"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "arboard",
@@ -4493,7 +4493,7 @@ dependencies = [
 
 [[package]]
 name = "rustclip-server"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "argon2",
@@ -4531,7 +4531,7 @@ dependencies = [
 
 [[package]]
 name = "rustclip-shared"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "serde",
  "serde_json",

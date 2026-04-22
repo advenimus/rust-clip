@@ -26,11 +26,9 @@ pub fn install(app: &AppHandle) -> Result<()> {
     let icon = Image::from_bytes(icon_bytes)?;
     let menu = build_initial_menu(app)?;
 
-    let mut builder = TrayIconBuilder::with_id(TRAY_ID).icon(icon);
+    let builder = TrayIconBuilder::with_id(TRAY_ID).icon(icon);
     #[cfg(target_os = "macos")]
-    {
-        builder = builder.icon_as_template(true);
-    }
+    let builder = builder.icon_as_template(true);
 
     let _tray: TrayIcon = builder
         .tooltip("RustClip")
