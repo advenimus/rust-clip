@@ -1,0 +1,9 @@
+[advisories]
+ignore = [
+    # rsa 0.9.x Marvin Attack. Pulled in by sqlx-macros-core (a compile-time
+    # proc-macro crate) for MySQL type introspection only. rustclip-server uses
+    # SQLite exclusively; the rsa code never ships in the release binary and
+    # is not reachable at runtime. Revisit if/when sqlx publishes a fixed
+    # release.
+    "RUSTSEC-2023-0071",
+]
