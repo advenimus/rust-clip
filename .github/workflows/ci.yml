@@ -54,4 +54,7 @@ jobs:
       - name: Install cargo-audit
         run: cargo install --locked cargo-audit
       - name: Run audit
-        run: cargo audit
+        # RUSTSEC-2023-0071 (rsa Marvin Attack) is pulled by sqlx-macros-core
+        # at compile time for MySQL type introspection. rustclip-server only
+        # speaks SQLite, so rsa never ships in the release binary.
+        run: cargo audit --ignore RUSTSEC-2023-0071
