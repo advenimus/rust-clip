@@ -91,13 +91,38 @@ pub async fn cmd_clear_history() -> Result<(), String> {
 /// Copy a past text history item back to the OS clipboard without
 /// re-broadcasting. The sync watcher's post-write quiet window
 /// suppresses the echo.
+///
+/// The actual arboard write runs inside `spawn_blocking` so it lands
+/// on a dedicated OS thread that survives the tokio-worker rescheduling
+/// (`arboard::Clipboard` holds per-instance OS handles and can race
+/// with the sync daemon's own clipboard-owning thread if two live on
+/// the same tokio runtime).
 #[tauri::command]
 pub async fn cmd_copy_history_text(entry_id: String) -> Result<(), String> {
-    let text = rustclip_client::gui_api::history_item_text(&entry_id)
-        .map_err(map_err)?
-        .ok_or_else(|| "history entry not found or not text".to_string())?;
-    let mut cb = Clipboard::new().map_err(|e| e.to_string())?;
-    cb.set_text(text).map_err(|e| e.to_string())
+    tracing::debug!(entry_id = %entry_id, "cmd_copy_history_text invoked");
+    let text = match rustclip_client::gui_api::history_item_text(&entry_id) {
+        Ok(Some(t)) => t,
+        Ok(None) => {
+            tracing::warn!(
+                entry_id = %entry_id,
+                "history entry not found or not a text row — nothing to copy"
+            );
+            return Err("history entry not found or not text".to_string());
+        }
+        Err(e) => {
+            tracing::error!(entry_id = %entry_id, error = %e, "history_item_text failed");
+            return Err(map_err(e));
+        }
+    };
+    let bytes = text.len();
+    tokio::task::spawn_blocking(move || -> Result<(), String> {
+        let mut cb = Clipboard::new().map_err(|e| format!("clipboard open: {e}"))?;
+        cb.set_text(text).map_err(|e| format!("clipboard write: {e}"))
+    })
+    .await
+    .map_err(|e| format!("clipboard task join: {e}"))??;
+    tracing::info!(entry_id = %entry_id, bytes, "copy-from-history wrote clipboard");
+    Ok(())
 }
 
 #[tauri::command]
