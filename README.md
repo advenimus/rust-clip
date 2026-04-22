@@ -23,7 +23,7 @@
     <img alt="GHCR" src="https://img.shields.io/badge/server-ghcr.io-0b66d1?logo=docker&logoColor=white" />
   </a>
   <img alt="Platforms" src="https://img.shields.io/badge/platforms-macOS%20%7C%20Windows%20%7C%20Linux-262a31" />
-  <img alt="License" src="https://img.shields.io/badge/license-MIT%20%7C%20Apache--2.0-262a31" />
+  <img alt="License" src="https://img.shields.io/badge/license-PolyForm%20Noncommercial-262a31" />
 </p>
 
 <!-- TODO: add a hero screenshot / animated GIF of a clip syncing between a Mac and a Windows machine. -->
@@ -225,9 +225,20 @@ Heavy lifting by the Rust ecosystem — `axum`, `tokio`, `sqlx`, `tauri`, `arboa
 
 ## License
 
-Licensed under either of
+RustClip is released under the [PolyForm Noncommercial License 1.0.0](LICENSE.md).
 
-- Apache License, Version 2.0 — <http://www.apache.org/licenses/LICENSE-2.0>
-- MIT license — <http://opensource.org/licenses/MIT>
+**You may use RustClip freely for:**
 
-at your option.
+- Personal and hobby use (self-hosting for your own devices, home networks, side projects).
+- Research, academic, and educational use.
+- Use by charitable, nonprofit, public-research, public-safety, environmental, and government organizations.
+
+**Commercial use requires a separate commercial license**, including:
+
+- Running RustClip internally at a for-profit company.
+- Offering RustClip (or a modified version) as a hosted / managed service.
+- Redistributing RustClip as part of a product sold to customers.
+
+A paid hosted RustClip service, run by the maintainer with self-service management for teams and businesses, is planned. If you need commercial terms in the meantime, open a conversation via the repository.
+
+The full legal text is in [LICENSE.md](LICENSE.md). For the short human-readable summary of the PolyForm Project's noncommercial terms, see <https://polyformproject.org/licenses/noncommercial/1.0.0/>.
