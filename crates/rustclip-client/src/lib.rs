@@ -9,6 +9,7 @@
 pub mod clipboard;
 pub mod clipboard_files;
 pub mod commands;
+pub mod config;
 pub mod crypto;
 pub mod files;
 pub mod gui_api;

@@ -1,16 +1,11 @@
 //! File send/receive primitives for RustClip.
 //!
-//! The full platform-native file-clipboard integration (macOS
-//! NSFilenamesPboardType, Windows CF_HDROP, Linux text/uri-list) is a
-//! rabbit hole that varies per platform and per desktop environment. v1
-//! ships a more tractable UX:
-//!
-//! * Senders invoke `rustclip-client send-files <paths>...` explicitly.
-//! * Receivers drop the decrypted payload into a per-session inbox under
-//!   the user's data dir, and log the inbox path for the user to pick up.
-//!
-//! Phase 6+ can layer a tray menu "Send file..." affordance and opt-in
-//! clipboard-file detection once each platform's backend is stable.
+//! Bundles one or more files (or directories, recursively) into a tar
+//! archive. Bundles are sent either via the explicit `send-files` CLI or,
+//! once OS-native file-copy detection picks them up, automatically from
+//! the clipboard watcher. A per-bundle size cap (configurable client-side
+//! via `config::ClientConfig`) protects the auto-sync path from accidental
+//! multi-gigabyte folder copies.
 
 use std::{
     fs,
@@ -19,11 +14,17 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
+use sha2::{Digest, Sha256};
 use tar::{Archive, Builder, Header};
+use walkdir::WalkDir;
+
+/// Default cap on automatically-detected bundle size, in bytes. Large
+/// copies (e.g., a 20 GB Downloads folder) fall back to the explicit
+/// `send-files` CLI rather than silently streaming across the wire.
+pub const DEFAULT_AUTO_BUNDLE_CAP_BYTES: u64 = 500 * 1024 * 1024;
 
 /// A bundle of one or more files packed into a tar archive for transport.
-/// Stored in memory during Phase 5 — moves to streaming for bigger payloads
-/// in later hardening.
+#[derive(Debug)]
 pub struct FileBundle {
     /// Raw tar bytes. These get encrypted + uploaded as a blob.
     pub tar_bytes: Vec<u8>,
@@ -32,58 +33,186 @@ pub struct FileBundle {
     pub total_bytes: u64,
 }
 
-/// Pack `paths` into an in-memory tar archive. Each entry is stored with a
-/// path relative to its parent directory, so the receiver reconstructs the
-/// original file name but not the full sender-side path.
+/// Typed errors from `pack_checked`, so callers can distinguish the
+/// "bundle too big" case from genuine failures and log / skip accordingly.
+#[derive(Debug, thiserror::Error)]
+pub enum PackError {
+    #[error("bundle total {total_bytes} bytes exceeds cap of {cap} bytes")]
+    TooLarge { total_bytes: u64, cap: u64 },
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
+impl From<std::io::Error> for PackError {
+    fn from(e: std::io::Error) -> Self {
+        PackError::Other(anyhow::Error::from(e))
+    }
+}
+
+/// Pack `paths` (files and/or directories) into an in-memory tar archive.
+///
+/// Equivalent to `pack_checked(paths, None)`; retained as the convenience
+/// entry point for the CLI `send-files` subcommand, which is an explicit
+/// user action and therefore uncapped.
 pub fn pack(paths: &[PathBuf]) -> Result<FileBundle> {
+    pack_checked(paths, None).map_err(|e| match e {
+        PackError::TooLarge { total_bytes, cap } => {
+            anyhow!("bundle total {total_bytes} bytes exceeds cap of {cap} bytes")
+        }
+        PackError::Other(inner) => inner,
+    })
+}
+
+/// Pack `paths` into a tar archive, rejecting the job if the total
+/// uncompressed size would exceed `max_bytes`. `None` means uncapped.
+///
+/// Directory entries are walked recursively; symlinks are skipped (not
+/// followed, not emitted) to keep the unpack path unable to forge paths
+/// outside the destination inbox.
+pub fn pack_checked(paths: &[PathBuf], max_bytes: Option<u64>) -> Result<FileBundle, PackError> {
     if paths.is_empty() {
-        return Err(anyhow!("no files to pack"));
+        return Err(PackError::Other(anyhow!("no files to pack")));
     }
 
+    // First pass: enumerate every (source, tar-name, size) triple and
+    // accumulate the total. This lets us reject an over-cap bundle before
+    // reading any file bytes.
+    let plan = build_plan(paths)?;
+    let total_bytes: u64 = plan.iter().map(|e| e.size).sum();
+    if let Some(cap) = max_bytes
+        && total_bytes > cap
+    {
+        return Err(PackError::TooLarge { total_bytes, cap });
+    }
+
+    // Second pass: actually stream bytes into the tar.
     let mut buf: Vec<u8> = Vec::new();
-    let mut total_bytes: u64 = 0;
     {
         let mut builder = Builder::new(&mut buf);
-        for p in paths {
-            let meta = fs::metadata(p).with_context(|| format!("stat {}", p.display()))?;
-            if !meta.is_file() {
-                return Err(anyhow!(
-                    "{} is not a regular file (directories are not yet supported)",
-                    p.display()
-                ));
-            }
-            let name = p
-                .file_name()
-                .ok_or_else(|| anyhow!("no file name in {}", p.display()))?
-                .to_string_lossy()
-                .into_owned();
-            let mut file = fs::File::open(p).with_context(|| format!("opening {}", p.display()))?;
+        for e in &plan {
+            let mut file = fs::File::open(&e.source)
+                .with_context(|| format!("opening {}", e.source.display()))
+                .map_err(PackError::Other)?;
             let mut header = Header::new_gnu();
-            header.set_size(meta.len());
+            header.set_size(e.size);
             header.set_mode(0o644);
             header.set_cksum();
             builder
-                .append_data(&mut header, &name, &mut file)
-                .with_context(|| format!("packing {}", p.display()))?;
-            total_bytes = total_bytes.saturating_add(meta.len());
+                .append_data(&mut header, &e.tar_name, &mut file)
+                .with_context(|| format!("packing {}", e.source.display()))
+                .map_err(PackError::Other)?;
         }
-        builder.finish().context("finalizing tar")?;
+        builder
+            .finish()
+            .context("finalizing tar")
+            .map_err(PackError::Other)?;
     }
 
-    let summary = if paths.len() == 1 {
-        paths[0]
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "file".into())
-    } else {
-        format!("{} files, {}", paths.len(), human_bytes(total_bytes))
-    };
+    let summary = build_summary(paths, plan.len(), total_bytes);
 
     Ok(FileBundle {
         tar_bytes: buf,
         summary,
         total_bytes,
     })
+}
+
+struct PackEntry {
+    source: PathBuf,
+    tar_name: String,
+    size: u64,
+}
+
+fn build_plan(paths: &[PathBuf]) -> Result<Vec<PackEntry>, PackError> {
+    let mut out = Vec::new();
+    for p in paths {
+        let meta = fs::symlink_metadata(p)
+            .with_context(|| format!("stat {}", p.display()))
+            .map_err(PackError::Other)?;
+        if meta.file_type().is_symlink() {
+            // Top-level symlinks are skipped — we never follow them.
+            continue;
+        }
+        let top_name = p
+            .file_name()
+            .ok_or_else(|| PackError::Other(anyhow!("no file name in {}", p.display())))?
+            .to_string_lossy()
+            .into_owned();
+
+        if meta.is_file() {
+            out.push(PackEntry {
+                source: p.clone(),
+                tar_name: top_name,
+                size: meta.len(),
+            });
+        } else if meta.is_dir() {
+            walk_dir(p, &top_name, &mut out)?;
+        } else {
+            return Err(PackError::Other(anyhow!(
+                "{} is not a regular file or directory",
+                p.display()
+            )));
+        }
+    }
+    if out.is_empty() {
+        return Err(PackError::Other(anyhow!(
+            "nothing to pack (all inputs were symlinks or empty directories)"
+        )));
+    }
+    Ok(out)
+}
+
+fn walk_dir(root: &Path, prefix: &str, out: &mut Vec<PackEntry>) -> Result<(), PackError> {
+    // follow_links(false): we never traverse a symlinked directory, and the
+    // entry-level check below drops symlinked files too. This keeps the
+    // unpack side from having to consider absolute-path or escape-style
+    // symlink entries.
+    for entry in WalkDir::new(root).follow_links(false) {
+        let entry = entry
+            .with_context(|| format!("walking {}", root.display()))
+            .map_err(|e: anyhow::Error| PackError::Other(e))?;
+        let ft = entry.file_type();
+        if !ft.is_file() {
+            continue;
+        }
+        let rel = entry
+            .path()
+            .strip_prefix(root)
+            .with_context(|| format!("rel-path of {}", entry.path().display()))
+            .map_err(PackError::Other)?;
+        let rel_str = rel.to_string_lossy();
+        let tar_name = if rel_str.is_empty() {
+            prefix.to_string()
+        } else {
+            format!("{prefix}/{rel_str}")
+        };
+        let meta = entry
+            .metadata()
+            .with_context(|| format!("stat {}", entry.path().display()))
+            .map_err(|e: anyhow::Error| PackError::Other(e))?;
+        out.push(PackEntry {
+            source: entry.path().to_path_buf(),
+            tar_name,
+            size: meta.len(),
+        });
+    }
+    Ok(())
+}
+
+fn build_summary(paths: &[PathBuf], file_count: usize, total_bytes: u64) -> String {
+    if paths.len() == 1 {
+        let name = paths[0]
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "item".into());
+        if file_count > 1 {
+            format!("{name} ({file_count} files, {})", human_bytes(total_bytes))
+        } else {
+            name
+        }
+    } else {
+        format!("{file_count} files, {}", human_bytes(total_bytes))
+    }
 }
 
 /// Unpack a tar bundle into `dest`, creating the directory if needed. Each
@@ -147,6 +276,56 @@ pub fn inbox_dir() -> PathBuf {
     base.join("rustclip").join("inbox")
 }
 
+/// True iff every path in `paths` resolves under the inbox directory.
+/// Used to short-circuit the send-side detection of our own receive-side
+/// pasteboard write without relying on timing.
+pub fn all_under_inbox(paths: &[PathBuf]) -> bool {
+    if paths.is_empty() {
+        return false;
+    }
+    let inbox = match inbox_dir().canonicalize() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+    paths.iter().all(|p| {
+        p.canonicalize()
+            .map(|c| c.starts_with(&inbox))
+            .unwrap_or(false)
+    })
+}
+
+/// Deterministic 32-byte hash over a file-list's (path, mtime) pairs.
+/// Used for echo-suppression of repeated clipboard polls picking up the
+/// same file list.
+pub fn hash_path_list(paths: &[PathBuf]) -> [u8; 32] {
+    let mut pairs: Vec<(Vec<u8>, i128)> = paths
+        .iter()
+        .map(|p| {
+            let canon = p.canonicalize().unwrap_or_else(|_| p.clone());
+            let bytes = canon
+                .as_os_str()
+                .to_string_lossy()
+                .into_owned()
+                .into_bytes();
+            let mtime = fs::metadata(p)
+                .and_then(|m| m.modified())
+                .ok()
+                .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                .map(|d| d.as_nanos() as i128)
+                .unwrap_or(0);
+            (bytes, mtime)
+        })
+        .collect();
+    pairs.sort();
+    let mut hasher = Sha256::new();
+    for (b, m) in &pairs {
+        hasher.update((b.len() as u64).to_le_bytes());
+        hasher.update(b);
+        hasher.update(m.to_le_bytes());
+    }
+    hasher.finalize().into()
+}
+
 fn human_bytes(n: u64) -> String {
     const KB: u64 = 1024;
     const MB: u64 = KB * 1024;
@@ -194,6 +373,62 @@ mod tests {
     }
 
     #[test]
+    fn pack_walks_directories() {
+        let src = TempDir::new().unwrap();
+        let dir = src.path().join("docs");
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        fs::write(dir.join("readme.md"), b"# hi").unwrap();
+        fs::write(dir.join("sub").join("nested.txt"), b"nested").unwrap();
+
+        let bundle = pack(&[dir]).unwrap();
+        let dst = TempDir::new().unwrap();
+        let written = unpack(&bundle.tar_bytes, dst.path()).unwrap();
+        assert_eq!(written.len(), 2);
+        let top = dst.path().join("docs");
+        assert!(top.join("readme.md").exists());
+        assert!(top.join("sub").join("nested.txt").exists());
+    }
+
+    #[test]
+    fn pack_checked_enforces_cap() {
+        let src = TempDir::new().unwrap();
+        let big = src.path().join("big.bin");
+        fs::write(&big, vec![7u8; 4096]).unwrap();
+        let err = pack_checked(&[big], Some(1024)).unwrap_err();
+        match err {
+            PackError::TooLarge { total_bytes, cap } => {
+                assert_eq!(cap, 1024);
+                assert!(total_bytes >= 4096);
+            }
+            other => panic!("expected TooLarge, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pack_skips_symlinks() {
+        let src = TempDir::new().unwrap();
+        let target = src.path().join("target.txt");
+        fs::write(&target, b"real").unwrap();
+
+        let dir = src.path().join("d");
+        fs::create_dir_all(&dir).unwrap();
+        let inner = dir.join("inner.txt");
+        fs::write(&inner, b"inner").unwrap();
+        // Place a symlink inside the directory pointing outside — walkdir
+        // should see it as a symlink and skip.
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&target, dir.join("escape.txt")).unwrap();
+
+        let bundle = pack(&[dir]).unwrap();
+        let dst = TempDir::new().unwrap();
+        let written = unpack(&bundle.tar_bytes, dst.path()).unwrap();
+        // The symlink is dropped; only `inner.txt` survives the walk.
+        assert!(written.iter().any(|p| p.ends_with("d/inner.txt")));
+        #[cfg(unix)]
+        assert!(!written.iter().any(|p| p.ends_with("d/escape.txt")));
+    }
+
+    #[test]
     fn safe_entry_name_rejects_parent_dir() {
         let err = safe_entry_name(Path::new("../escape.txt")).unwrap_err();
         assert!(err.to_string().contains("parent-dir"));
@@ -209,5 +444,29 @@ mod tests {
     fn safe_entry_name_accepts_plain() {
         let p = safe_entry_name(Path::new("report.pdf")).unwrap();
         assert_eq!(p, Path::new("report.pdf"));
+    }
+
+    #[test]
+    fn hash_path_list_is_order_insensitive() {
+        let src = TempDir::new().unwrap();
+        let a = src.path().join("a.txt");
+        let b = src.path().join("b.txt");
+        fs::write(&a, b"x").unwrap();
+        fs::write(&b, b"y").unwrap();
+        let h1 = hash_path_list(&[a.clone(), b.clone()]);
+        let h2 = hash_path_list(&[b, a]);
+        assert_eq!(h1, h2);
+    }
+
+    #[test]
+    fn hash_path_list_differs_for_different_sets() {
+        let src = TempDir::new().unwrap();
+        let a = src.path().join("a.txt");
+        let b = src.path().join("b.txt");
+        fs::write(&a, b"x").unwrap();
+        fs::write(&b, b"y").unwrap();
+        let h1 = hash_path_list(&[a.clone()]);
+        let h2 = hash_path_list(&[a, b]);
+        assert_ne!(h1, h2);
     }
 }

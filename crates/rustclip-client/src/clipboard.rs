@@ -4,6 +4,7 @@
 
 use std::{
     borrow::Cow,
+    path::PathBuf,
     sync::mpsc as stdmpsc,
     thread,
     time::{Duration, Instant},
@@ -15,18 +16,26 @@ use sha2::{Digest, Sha256};
 use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
+use crate::{clipboard_files, config::ClientConfig, files};
+
 const POLL_INTERVAL: Duration = Duration::from_millis(500);
 /// Time window after writing an image during which we ignore image reads.
 /// Platforms can roundtrip RGBA with slight differences (premultiplied
 /// alpha, row-stride alignment) so content-hash echo suppression alone is
 /// unreliable for images. A small quiet window catches the echo reliably.
 const IMAGE_WRITE_QUIET: Duration = Duration::from_secs(3);
+/// Time window after writing a file list during which we ignore file-list
+/// reads. Longer than the image window because the receive path does a
+/// tar unpack + NSURL / HDROP allocation before the pasteboard write; a
+/// large bundle can burn past 3 s.
+const FILES_WRITE_QUIET: Duration = Duration::from_secs(5);
 
 /// Events emitted by the clipboard watcher when the user copies something.
 #[derive(Debug)]
 pub enum ClipEvent {
     Text(String),
     Image(ImageBytes),
+    Files(Vec<PathBuf>),
 }
 
 /// Decoded PNG image bytes plus dimensions for a round-trip write.
@@ -43,6 +52,7 @@ pub struct ImageBytes {
 pub enum ClipboardCmd {
     WriteText(String),
     WriteImage(ImageBytes),
+    WriteFileList(Vec<PathBuf>),
     Shutdown,
 }
 
@@ -60,6 +70,12 @@ impl ClipboardHandle {
     pub fn write_image(&self, image: ImageBytes) -> Result<()> {
         self.cmd_tx
             .send(ClipboardCmd::WriteImage(image))
+            .context("clipboard worker shut down")
+    }
+
+    pub fn write_file_list(&self, paths: Vec<PathBuf>) -> Result<()> {
+        self.cmd_tx
+            .send(ClipboardCmd::WriteFileList(paths))
             .context("clipboard worker shut down")
     }
 
@@ -93,9 +109,14 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
         }
     };
 
+    let config = ClientConfig::load().unwrap_or_default();
+
     let mut last_read: Option<[u8; 32]> = None;
     let mut last_set: Option<[u8; 32]> = None;
     let mut last_image_write_at: Option<Instant> = None;
+    let mut last_read_files: Option<[u8; 32]> = None;
+    let mut last_set_files: Option<[u8; 32]> = None;
+    let mut last_files_write_at: Option<Instant> = None;
 
     loop {
         // Drain pending commands first.
@@ -125,6 +146,18 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
                         last_image_write_at = Some(Instant::now());
                     }
                 }
+                Ok(ClipboardCmd::WriteFileList(paths)) => {
+                    // Bump the echo-suppression hash BEFORE the actual
+                    // pasteboard write so the next poll can't sneak in a
+                    // read between the write and the hash update.
+                    let hash = files::hash_path_list(&paths);
+                    last_set_files = Some(hash);
+                    last_read_files = Some(hash);
+                    last_files_write_at = Some(Instant::now());
+                    if let Err(e) = clipboard_files::write_file_list(&paths) {
+                        warn!(error = %e, "clipboard file-list write failed");
+                    }
+                }
                 Ok(ClipboardCmd::Shutdown) | Err(stdmpsc::TryRecvError::Disconnected) => {
                     debug!("clipboard worker exiting");
                     return;
@@ -133,7 +166,74 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
             }
         }
 
-        // Poll text first, then fall back to image.
+        // Poll file list FIRST. Finder / Explorer also push the filename
+        // onto the pasteboard as a text fallback; if we polled text first
+        // we'd spuriously send the filename as a text clip.
+        //
+        // `files_on_clipboard` records whether ANY file URL is present
+        // this tick (regardless of whether we send it, suppress it as an
+        // echo, or ignore it because the list is under our own inbox).
+        // The text and image polls below use that flag to skip Finder's
+        // auto-derived text/icon fallbacks — those are never a real
+        // user-intended clip when files are what was copied.
+        let mut files_on_clipboard = false;
+        if config.auto_sync_files {
+            let in_files_quiet = last_files_write_at
+                .map(|t| t.elapsed() < FILES_WRITE_QUIET)
+                .unwrap_or(false);
+            if !in_files_quiet {
+                match clipboard_files::read_file_list() {
+                    Ok(Some(paths)) if !paths.is_empty() => {
+                        files_on_clipboard = true;
+                        if files::all_under_inbox(&paths) {
+                            // We just wrote these ourselves (receive-side
+                            // unpack). Skip silently; don't even update
+                            // last_read_files so the user's own later
+                            // manual re-copy still syncs.
+                        } else {
+                            let hash = files::hash_path_list(&paths);
+                            let already_read = last_read_files == Some(hash);
+                            let matches_echo = last_set_files == Some(hash);
+                            if !already_read && !matches_echo {
+                                last_read_files = Some(hash);
+                                if event_tx.blocking_send(ClipEvent::Files(paths)).is_err() {
+                                    debug!("event receiver dropped, clipboard worker exiting");
+                                    return;
+                                }
+                                thread::sleep(POLL_INTERVAL);
+                                continue;
+                            } else if !already_read {
+                                last_read_files = Some(hash);
+                            }
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        debug!(error = %e, "clipboard file-list read error");
+                    }
+                }
+            } else {
+                // Inside the quiet window we don't call read_file_list
+                // (we just wrote it ourselves on the receive path), but
+                // file URLs ARE still sitting on the pasteboard — they
+                // stay there until the user copies something else. The
+                // auto-derived text/icon representations are therefore
+                // also still there, so treat this tick as "files
+                // present" to gate the text / image polls.
+                files_on_clipboard = true;
+            }
+        }
+
+        if files_on_clipboard {
+            // Skip the text and image polls entirely: any text/icon the
+            // OS derived from the file URLs is a fallback, not a real
+            // clip. Note we DON'T stamp last_read for them either, so a
+            // genuine text copy later still registers.
+            thread::sleep(POLL_INTERVAL);
+            continue;
+        }
+
+        // Poll text second.
         match cb.get_text() {
             Ok(text) if !text.is_empty() => {
                 let hash = sha256(text.as_bytes());
@@ -158,6 +258,7 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
             }
         }
 
+        // Poll image third.
         let in_quiet_window = last_image_write_at
             .map(|t| t.elapsed() < IMAGE_WRITE_QUIET)
             .unwrap_or(false);

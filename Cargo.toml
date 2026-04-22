@@ -63,6 +63,8 @@ arboard = { version = "3", features = ["wayland-data-control"] }
 png = "0.17"
 tar = "0.4"
 dirs = "5"
+walkdir = "2"
+toml = "0.8"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # Native macOS pasteboard bindings for file URLs
@@ -78,6 +80,14 @@ objc2-foundation = { version = "0.3", default-features = false, features = [
 objc2-app-kit = { version = "0.3", default-features = false, features = [
     "std",
     "NSPasteboard",
+] }
+
+# Native Windows bindings for CF_HDROP file-copy detection.
+windows = { version = "0.58", features = [
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_Foundation",
+    "Win32_UI_Shell",
 ] }
 tokio-tungstenite = { version = "0.29", features = ["rustls-tls-webpki-roots"] }
 url = "2"

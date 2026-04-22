@@ -12,7 +12,9 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 use crate::{
-    commands, crypto, files,
+    commands,
+    config::ClientConfig,
+    crypto, files,
     history::{self, History, HistoryItem, HistoryKind},
     http::ServerClient,
     keychain::{self, Credentials},
@@ -239,6 +241,40 @@ pub fn history_item_text(entry_id: &str) -> Result<Option<String>> {
         .into_iter()
         .find(|it| it.id == id && matches!(it.kind, HistoryKind::Text))
         .map(|it| it.preview))
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClientConfigView {
+    pub auto_sync_files: bool,
+    pub auto_sync_max_bytes: u64,
+}
+
+impl From<ClientConfig> for ClientConfigView {
+    fn from(c: ClientConfig) -> Self {
+        Self {
+            auto_sync_files: c.auto_sync_files,
+            auto_sync_max_bytes: c.auto_sync_max_bytes,
+        }
+    }
+}
+
+impl From<ClientConfigView> for ClientConfig {
+    fn from(v: ClientConfigView) -> Self {
+        Self {
+            auto_sync_files: v.auto_sync_files,
+            auto_sync_max_bytes: v.auto_sync_max_bytes,
+        }
+    }
+}
+
+pub fn get_client_config() -> Result<ClientConfigView> {
+    Ok(ClientConfig::load()?.into())
+}
+
+pub fn set_client_config(view: ClientConfigView) -> Result<ClientConfigView> {
+    let cfg: ClientConfig = view.into();
+    cfg.save()?;
+    Ok(cfg.into())
 }
 
 pub async fn send_files(paths: Vec<PathBuf>) -> Result<Uuid> {

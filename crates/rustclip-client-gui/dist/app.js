@@ -146,6 +146,42 @@
       }
     });
 
+    const autoSyncFilesToggle = document.getElementById('auto-sync-files-toggle');
+    const autoSyncMaxMb = document.getElementById('auto-sync-max-mb');
+    const autoSyncMaxSave = document.getElementById('auto-sync-max-save');
+
+    async function refreshClientConfig() {
+      try {
+        const cfg = await invoke('cmd_get_client_config');
+        autoSyncFilesToggle.checked = !!cfg.auto_sync_files;
+        autoSyncMaxMb.value = Math.max(1, Math.round(cfg.auto_sync_max_bytes / (1024 * 1024)));
+      } catch (err) {
+        setMsg(String(err), 'err');
+      }
+    }
+
+    async function saveClientConfig() {
+      const mb = Math.max(1, parseInt(autoSyncMaxMb.value, 10) || 500);
+      try {
+        const updated = await invoke('cmd_set_client_config', {
+          config: {
+            auto_sync_files: autoSyncFilesToggle.checked,
+            auto_sync_max_bytes: mb * 1024 * 1024,
+          },
+        });
+        autoSyncMaxMb.value = Math.max(1, Math.round(updated.auto_sync_max_bytes / (1024 * 1024)));
+        setMsg('Saved. Restart sync to apply the auto-sync toggle.', 'ok');
+      } catch (err) {
+        setMsg(String(err), 'err');
+      }
+    }
+
+    autoSyncFilesToggle.addEventListener('change', saveClientConfig);
+    autoSyncMaxSave.addEventListener('click', saveClientConfig);
+    autoSyncMaxMb.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
+    });
+
     async function refreshAccount() {
       try {
         const acc = await invoke('cmd_status');
@@ -183,6 +219,7 @@
           accountStatus.innerHTML = '';
         }
         try { autostartToggle.checked = await invoke('cmd_get_autostart'); } catch {}
+        await refreshClientConfig();
       } catch (err) {
         setMsg(String(err), 'err');
       }

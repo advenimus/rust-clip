@@ -98,6 +98,8 @@ fn main() {
             commands::cmd_check_update,
             commands::cmd_install_update,
             commands::cmd_update_install_kind,
+            commands::cmd_get_client_config,
+            commands::cmd_set_client_config,
         ])
         .on_window_event(|window, event| {
             // Closing a UI window should hide it rather than quit the app;

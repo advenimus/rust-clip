@@ -28,9 +28,9 @@ use uuid::Uuid;
 
 use crate::{
     clipboard::{self, ClipEvent, ClipboardHandle},
-    clipboard_files,
+    config::ClientConfig,
     crypto::Cipher,
-    files::{self, FileBundle},
+    files::{self, FileBundle, PackError},
     history::{Direction, History},
     http::ServerClient,
     image_codec,
@@ -143,8 +143,11 @@ async fn session(
                         .await;
                     return Ok(());
                 };
-                let (outgoing, preview) =
-                    build_outgoing(cipher, rest, device_token, event).await?;
+                let Some((outgoing, preview)) =
+                    build_outgoing(cipher, rest, device_token, event).await?
+                else {
+                    continue;
+                };
                 seen.insert(outgoing.id);
                 if let Err(e) = record_outgoing(history, &outgoing, &preview) {
                     warn!(error = %e, "failed to record outgoing history");
@@ -190,31 +193,33 @@ async fn session(
 /// decrypted metadata separate from the wire event.
 pub enum OutgoingPreview {
     Text(String),
-    Image {
-        width: usize,
-        height: usize,
-    },
-    #[allow(dead_code)]
-    Bundle {
-        summary: String,
-    },
+    Image { width: usize, height: usize },
+    Bundle { summary: String },
 }
 
+/// Build the on-wire event for one locally-detected clip.
+///
+/// Returns `Ok(None)` to mean "skip this event silently" — e.g. an
+/// auto-detected file bundle exceeds the configured size cap. The caller
+/// continues the loop without sending. Hard failures still bubble up via
+/// `Err`.
 async fn build_outgoing(
     cipher: &Cipher,
     rest: &ServerClient,
     device_token: &str,
     event: ClipEvent,
-) -> Result<(ClipEventMessage, OutgoingPreview)> {
+) -> Result<Option<(ClipEventMessage, OutgoingPreview)>> {
     match event {
         ClipEvent::Text(text) => {
+            info!(bytes = text.len(), "outgoing text clip");
             let (nonce, ciphertext) = cipher.encrypt(text.as_bytes())?;
             let plain_len = text.len() as i64;
             let msg =
                 build_event(ciphertext, nonce, MIME_TEXT, plain_len, rest, device_token).await?;
-            Ok((msg, OutgoingPreview::Text(text)))
+            Ok(Some((msg, OutgoingPreview::Text(text))))
         }
         ClipEvent::Image(image) => {
+            info!(width = image.width, height = image.height, "outgoing image clip");
             let png_bytes = image_codec::encode_png(&image)?;
             let plain_len = png_bytes.len() as i64;
             let width = image.width;
@@ -222,7 +227,48 @@ async fn build_outgoing(
             let (nonce, ciphertext) = cipher.encrypt(&png_bytes)?;
             let msg =
                 build_event(ciphertext, nonce, MIME_PNG, plain_len, rest, device_token).await?;
-            Ok((msg, OutgoingPreview::Image { width, height }))
+            Ok(Some((msg, OutgoingPreview::Image { width, height })))
+        }
+        ClipEvent::Files(paths) => {
+            let cap = ClientConfig::load().unwrap_or_default().auto_sync_max_bytes;
+            let path_count = paths.len();
+            info!(
+                count = path_count,
+                first = %paths.first().map(|p| p.display().to_string()).unwrap_or_default(),
+                "outgoing file bundle detected from clipboard",
+            );
+            let paths_for_task = paths.clone();
+            let pack_result = tokio::task::spawn_blocking(move || {
+                files::pack_checked(&paths_for_task, Some(cap))
+            })
+            .await
+            .map_err(|e| anyhow!("pack task panicked: {e}"))?;
+            let bundle = match pack_result {
+                Ok(b) => b,
+                Err(PackError::TooLarge { total_bytes, cap }) => {
+                    warn!(
+                        paths = path_count,
+                        total_bytes,
+                        cap,
+                        "auto-sync file bundle exceeds cap; skipping (use `send-files` CLI to override)",
+                    );
+                    return Ok(None);
+                }
+                Err(PackError::Other(e)) => return Err(e.context("packing file bundle")),
+            };
+            let summary = bundle.summary.clone();
+            let plain_len = bundle.tar_bytes.len() as i64;
+            let (nonce, ciphertext) = cipher.encrypt(&bundle.tar_bytes)?;
+            let msg = build_event(
+                ciphertext,
+                nonce,
+                MIME_BUNDLE,
+                plain_len,
+                rest,
+                device_token,
+            )
+            .await?;
+            Ok(Some((msg, OutgoingPreview::Bundle { summary })))
         }
     }
 }
@@ -490,8 +536,11 @@ async fn apply_incoming(
             for p in &written {
                 info!(file = %p.display(), "inbox file");
             }
-            if let Err(e) = clipboard_files::write_file_list(&written) {
-                warn!(error = %e, "pasteboard file-list write failed");
+            // Route through the clipboard worker so the watcher's
+            // echo-suppression state moves in lockstep with the
+            // pasteboard write.
+            if let Err(e) = clipboard.write_file_list(written.clone()) {
+                warn!(error = %e, "requesting file-list write failed");
             }
             let summary = summarize_incoming_bundle(&written);
             if let Ok(mut h) = history.lock() {

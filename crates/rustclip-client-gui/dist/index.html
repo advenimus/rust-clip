@@ -58,6 +58,16 @@
         <label class="checkbox">
           <input type="checkbox" id="autostart-toggle"> Start RustClip on login
         </label>
+        <label class="checkbox">
+          <input type="checkbox" id="auto-sync-files-toggle"> Auto-sync files copied from Finder / Explorer
+        </label>
+        <label class="inline-number">
+          Max auto-sync bundle size:
+          <input type="number" id="auto-sync-max-mb" min="1" max="10240" step="1">
+          MB
+          <button id="auto-sync-max-save" class="btn btn-ghost">Save</button>
+        </label>
+        <p class="muted-note">Copies larger than this are skipped. Use the <code>send-files</code> CLI to send anything over the cap on demand.</p>
       </div>
       <div id="account-msg" class="status"></div>
     </section>

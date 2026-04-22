@@ -4,8 +4,9 @@
 
 use arboard::Clipboard;
 use rustclip_client::gui_api::{
-    AccountStatus, EnrollInput, HistoryEntryView, LoginInput, clear_history, enroll, list_history,
-    local_account, login, logout, reset,
+    AccountStatus, ClientConfigView, EnrollInput, HistoryEntryView, LoginInput, clear_history,
+    enroll, get_client_config, list_history, local_account, login, logout, reset,
+    set_client_config,
 };
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
@@ -220,4 +221,14 @@ pub async fn cmd_install_update(app: AppHandle) -> Result<(), String> {
 #[tauri::command]
 pub async fn cmd_update_install_kind() -> Result<updater::InstallKind, String> {
     Ok(updater::install_kind())
+}
+
+#[tauri::command]
+pub async fn cmd_get_client_config() -> Result<ClientConfigView, String> {
+    get_client_config().map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn cmd_set_client_config(config: ClientConfigView) -> Result<ClientConfigView, String> {
+    set_client_config(config).map_err(map_err)
 }
