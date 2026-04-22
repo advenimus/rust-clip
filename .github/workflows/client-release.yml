@@ -73,8 +73,9 @@ jobs:
             macOS builds are **unsigned** — after downloading, run:
               xattr -d com.apple.quarantine /Applications/RustClip.app
             Windows SmartScreen may warn on first launch (More info → Run anyway).
-          releaseDraft: true
+          releaseDraft: false
           prerelease: false
+          includeUpdaterJson: false
           args: ${{ matrix.platform.tauri-args }}
 
       - name: Package CLI (Unix)
@@ -101,5 +102,6 @@ jobs:
             rustclip-cli-${{ github.ref_name }}-${{ matrix.platform.label }}.tar.gz
             rustclip-cli-${{ github.ref_name }}-${{ matrix.platform.label }}.zip
           tag_name: ${{ github.ref_name }}
-          draft: true
+          draft: false
+          make_latest: "true"
           fail_on_unmatched_files: false
