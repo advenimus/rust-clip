@@ -27,6 +27,7 @@ base64.workspace = true
 rand.workspace = true
 sha2.workspace = true
 hex.workspace = true
+zeroize.workspace = true
 futures-util.workspace = true
 
 clap.workspace = true

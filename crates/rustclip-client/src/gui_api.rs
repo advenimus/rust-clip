@@ -152,7 +152,7 @@ pub struct SyncContext {
     pub server_url: String,
     pub device_token: String,
     pub device_id: Uuid,
-    pub content_key: [u8; 32],
+    pub content_key: zeroize::Zeroizing<[u8; 32]>,
 }
 
 pub fn load_sync_context() -> Result<SyncContext> {
@@ -168,11 +168,13 @@ pub fn load_sync_context() -> Result<SyncContext> {
             crypto::CONTENT_KEY_BYTES
         ));
     }
-    let mut content_key = [0u8; 32];
+    let mut content_key = zeroize::Zeroizing::new([0u8; 32]);
     content_key.copy_from_slice(&content_key_bytes);
+    let mut content_key_bytes = content_key_bytes;
+    zeroize::Zeroize::zeroize(&mut content_key_bytes);
     Ok(SyncContext {
-        server_url: creds.server_url,
-        device_token: creds.device_token,
+        server_url: creds.server_url.clone(),
+        device_token: creds.device_token.clone(),
         device_id,
         content_key,
     })
@@ -220,7 +222,7 @@ fn kind_label(k: HistoryKind) -> &'static str {
 }
 
 pub fn list_history(limit: i64) -> Result<Vec<HistoryEntryView>> {
-    let history = History::open_default()?;
+    let history = open_history_best_effort()?;
     Ok(history
         .list(limit)?
         .into_iter()
@@ -235,12 +237,22 @@ pub fn clear_history() -> Result<()> {
 
 pub fn history_item_text(entry_id: &str) -> Result<Option<String>> {
     let id = Uuid::parse_str(entry_id).context("parsing history id")?;
-    let history = History::open_default()?;
+    let history = open_history_best_effort()?;
     let items = history.list(history::DEFAULT_MAX_ITEMS)?;
     Ok(items
         .into_iter()
         .find(|it| it.id == id && matches!(it.kind, HistoryKind::Text))
         .map(|it| it.preview))
+}
+
+/// Open the history DB with the preview cipher if the keychain has a
+/// content key; fall back to unencrypted mode (encrypted rows become
+/// `"(encrypted)"`) if the user isn't currently logged in.
+fn open_history_best_effort() -> Result<History> {
+    match load_sync_context() {
+        Ok(ctx) => History::open_default_with_key(&ctx.content_key),
+        Err(_) => History::open_default(),
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -295,7 +307,7 @@ pub async fn send_files(paths: Vec<PathBuf>) -> Result<Uuid> {
     )
     .await?;
 
-    if let Ok(mut h) = History::open_default() {
+    if let Ok(mut h) = History::open_default_with_key(&ctx.content_key) {
         let _ = h.record_bundle(
             history::Direction::Outgoing,
             &summary,

@@ -164,11 +164,23 @@ pub async fn sync_cmd() -> Result<()> {
             crypto::CONTENT_KEY_BYTES
         ));
     }
-    let mut content_key = [0u8; 32];
+    let mut content_key = zeroize::Zeroizing::new([0u8; 32]);
     content_key.copy_from_slice(&content_key_bytes);
+    let mut content_key_bytes = content_key_bytes;
+    zeroize::Zeroize::zeroize(&mut content_key_bytes);
 
     println!("connecting to {}", creds.server_url);
-    sync::run(creds.server_url, creds.device_token, device_id, content_key).await
+    // Clone non-secret fields out of `creds`; Credentials implements
+    // Drop (for secret zeroization) so we can't move individual
+    // fields. The .clone() allocates new String buffers; the
+    // originals are wiped when `creds` goes out of scope.
+    sync::run(
+        creds.server_url.clone(),
+        creds.device_token.clone(),
+        device_id,
+        content_key,
+    )
+    .await
 }
 
 pub async fn status() -> Result<()> {
@@ -200,7 +212,13 @@ pub fn reset() -> Result<()> {
 }
 
 pub fn show_history(limit: i64) -> Result<()> {
-    let history = History::open_default()?;
+    // Load the content key so we can decrypt preview rows written by a
+    // running sync daemon. If the user isn't enrolled yet we fall back
+    // to unencrypted mode — the DB would be empty anyway.
+    let history = match load_content_key_from_keychain() {
+        Ok(key) => History::open_default_with_key(&key)?,
+        Err(_) => History::open_default()?,
+    };
     let items = history.list(limit)?;
     if items.is_empty() {
         println!("history is empty.");
@@ -228,6 +246,26 @@ pub fn clear_history() -> Result<()> {
     history.clear()?;
     println!("history cleared.");
     Ok(())
+}
+
+/// Load the derived content key from the keychain, returning the raw
+/// 32 bytes. Used by history / send-files paths that need to talk to
+/// the preview cipher but don't otherwise run the sync loop.
+fn load_content_key_from_keychain() -> Result<[u8; 32]> {
+    let creds = keychain::load()?
+        .ok_or_else(|| anyhow!("not enrolled; run `enroll` or `login` first"))?;
+    let bytes = BASE64
+        .decode(creds.content_key_b64.as_bytes())
+        .context("decoding content key from keychain")?;
+    if bytes.len() != crypto::CONTENT_KEY_BYTES {
+        return Err(anyhow!(
+            "content key must be {} bytes",
+            crypto::CONTENT_KEY_BYTES
+        ));
+    }
+    let mut out = [0u8; 32];
+    out.copy_from_slice(&bytes);
+    Ok(out)
 }
 
 fn format_millis(ms: i64) -> String {
@@ -271,7 +309,7 @@ pub async fn send_files(paths: Vec<PathBuf>) -> Result<()> {
     )
     .await?;
 
-    if let Ok(mut h) = History::open_default() {
+    if let Ok(mut h) = History::open_default_with_key(&content_key) {
         let _ = h.record_bundle(
             crate::history::Direction::Outgoing,
             &summary,

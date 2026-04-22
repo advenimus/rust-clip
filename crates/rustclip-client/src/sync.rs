@@ -11,6 +11,7 @@ use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use futures_util::{SinkExt, StreamExt};
 use rand::Rng;
+use zeroize::Zeroizing;
 use rustclip_shared::{
     MAX_INLINE_CIPHERTEXT_BYTES, PROTOCOL_VERSION,
     protocol::{
@@ -45,12 +46,15 @@ pub async fn run(
     server_url: String,
     device_token: String,
     device_id: Uuid,
-    content_key: [u8; 32],
+    content_key: Zeroizing<[u8; 32]>,
 ) -> Result<()> {
     let ws_url = http_to_ws(&server_url)?;
+    // Key is cloned into XChaCha20Poly1305 which ZeroizeOnDrop's its
+    // internal copy; `content_key` itself gets wiped when this task
+    // returns thanks to `Zeroizing`.
     let cipher = Cipher::new(&content_key);
     let rest = ServerClient::new(&server_url)?;
-    let history = Arc::new(Mutex::new(History::open_default()?));
+    let history = Arc::new(Mutex::new(History::open_default_with_key(&content_key)?));
 
     let (event_tx, event_rx) = mpsc::channel::<ClipEvent>(64);
     let clipboard = clipboard::spawn_watcher(event_tx)?;
