@@ -12,7 +12,7 @@ use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 
-use crate::{AppState, tray};
+use crate::{AppState, tray, updater};
 
 fn map_err<E: std::fmt::Display>(e: E) -> String {
     e.to_string()
@@ -193,7 +193,7 @@ pub async fn cmd_about() -> Result<AboutInfo, String> {
         author_name: "Chris Vautour",
         author_handle: "advenimus",
         author_url: "https://github.com/advenimus",
-        license: "MIT OR Apache-2.0",
+        license: "PolyForm Noncommercial 1.0.0",
     })
 }
 
@@ -205,4 +205,19 @@ pub async fn cmd_open_external(app: AppHandle, url: String) -> Result<(), String
     app.opener()
         .open_url(url, None::<&str>)
         .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn cmd_check_update(app: AppHandle) -> Result<Option<updater::UpdateInfo>, String> {
+    updater::check_for_update(&app).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn cmd_install_update(app: AppHandle) -> Result<(), String> {
+    updater::install_update(&app).await.map_err(map_err)
+}
+
+#[tauri::command]
+pub async fn cmd_update_install_kind() -> Result<updater::InstallKind, String> {
+    Ok(updater::install_kind())
 }

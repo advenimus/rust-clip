@@ -6,6 +6,24 @@
   <p class="muted">RustClip server · <span class="mono">v{{ version }}</span></p>
 </section>
 
+{% match update_available %}
+{% when Some with (u) %}
+<section class="panel update-card">
+  <header class="panel-head">
+    <h2>Update available · {{ u.latest_version }}</h2>
+    <a href="{{ u.release_url }}" target="_blank" rel="noopener noreferrer" class="link-muted">View on GitHub ↗</a>
+  </header>
+  <p class="muted-note">Published {{ u.published_at }}. Upgrade with <code>docker compose pull &amp;&amp; docker compose up -d</code> on the host, or run the opt-in Watchtower profile for hands-off updates.</p>
+  {% if !u.body.is_empty() %}
+  <pre class="release-notes">{{ u.body }}</pre>
+  {% endif %}
+</section>
+{% when None %}
+  {% if !update_check_enabled %}
+  <p class="muted-note">Update checks are disabled. Enable them in <a href="/admin/settings">Settings</a> to be notified when a new release ships.</p>
+  {% endif %}
+{% endmatch %}
+
 <section class="panel about-hero">
   <img class="about-mark" src="/static/logo.png" alt="RustClip" />
   <div class="about-copy">
@@ -33,7 +51,10 @@
     <dt>Stack</dt>
     <dd class="mono">Rust · axum · SQLite (WAL) · Askama · tower-sessions · XChaCha20-Poly1305 · Argon2id</dd>
     <dt>License</dt>
-    <dd>MIT OR Apache-2.0</dd>
+    <dd>
+      <a href="{{ repo_url }}/blob/main/LICENSE.md" target="_blank" rel="noopener noreferrer">PolyForm Noncommercial 1.0.0</a>
+      <span class="muted-note">— personal, hobby, and nonprofit use. Commercial use requires a separate license from the maintainer.</span>
+    </dd>
   </dl>
 </section>
 

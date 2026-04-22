@@ -11,7 +11,7 @@ members = [
 version = "0.1.2"
 edition = "2024"
 rust-version = "1.88"
-license = "MIT OR Apache-2.0"
+license = "PolyForm-Noncommercial-1.0.0"
 
 [workspace.dependencies]
 rustclip-shared = { path = "crates/rustclip-shared" }
@@ -53,6 +53,7 @@ subtle = "2"
 futures-util = "0.3"
 
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+semver = "1"
 clap = { version = "4", features = ["derive", "env"] }
 rpassword = "7"
 keyring = { version = "3", features = ["apple-native", "windows-native", "sync-secret-service"] }
@@ -87,6 +88,7 @@ tauri-build = { version = "2", features = [] }
 tauri-plugin-autostart = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
+tauri-plugin-updater = "2"
 
 # dev / test
 tempfile = "3"
