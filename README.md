@@ -195,7 +195,7 @@ Rust **1.88+** (pinned in `rust-toolchain.toml`).
 
 **Planned**
 
-- OS-native file-copy detection (so copying a file in Finder / Explorer / a file manager auto-syncs without the `send-files` CLI dance).
+- Linux file-copy detection. macOS + Windows auto-sync Finder/Explorer copies today; Linux still relies on the `send-files` CLI because arboard exposes no file-list reader and the GNOME/KDE/X11/Wayland surface is fragmented.
 - Windows code-signing (macOS already signed + notarized).
 - Optional "require password on unlock" mode that purges the content key from memory between sessions.
 - Linux `aarch64` client build.

@@ -18,7 +18,7 @@ Environment variables consumed by the server:
 | `RUSTCLIP_PUBLIC_URL` | `http://<bind_addr>` | Canonical URL shown in the admin portal. Set to `https://clip.example.com` when you wire up TLS. |
 | `RUSTCLIP_ADMIN_USERNAME` | (none) | Bootstrap admin account. Only used on first boot when the `users` table is empty. |
 | `RUSTCLIP_ADMIN_PASSWORD` | (none) | Bootstrap admin password. Rotate immediately via the admin portal after first login. |
-| `RUSTCLIP_MAX_PAYLOAD_BYTES` | `26214400` (25 MB) | Max single-blob ciphertext. Can also be tuned live in the admin settings page. |
+| `RUSTCLIP_MAX_PAYLOAD_BYTES` | `26214400` (25 MB) | Max single-blob ciphertext. Can also be tuned live in the admin settings page (hard ceiling is 1 GB). Tune this up if your users auto-sync large files (disk images, installers) from Finder / Explorer — bundles over the cap are rejected by the server. |
 | `RUSTCLIP_OFFLINE_TTL_HOURS` | `24` | How long encrypted events and blobs live for undelivered devices. Also tunable live. |
 | `RUSTCLIP_LOG_LEVEL` | `info` | Standard `tracing` env filter. Examples: `warn,rustclip_server=debug`. |
 | `RUSTCLIP_LOG_FORMAT` | `pretty` | Set to `json` for structured logs in production. |
