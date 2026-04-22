@@ -5,9 +5,10 @@
 use arboard::Clipboard;
 use rustclip_client::gui_api::{
     AccountStatus, ClientConfigView, EnrollInput, HistoryEntryView, LoginInput, clear_history,
-    enroll, get_client_config, list_history, local_account, login, logout, reset,
-    set_client_config,
+    enroll, get_client_config, history_item_bundle_paths, history_item_image, list_history,
+    local_account, login, logout, reset, set_client_config,
 };
+use rustclip_client::history::HistoryKind;
 use serde::Serialize;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt;
@@ -88,41 +89,107 @@ pub async fn cmd_clear_history() -> Result<(), String> {
     clear_history().map_err(map_err)
 }
 
-/// Copy a past text history item back to the OS clipboard without
-/// re-broadcasting. The sync watcher's post-write quiet window
-/// suppresses the echo.
+/// Copy any kind of history row back onto the OS clipboard without
+/// re-broadcasting to other devices.
 ///
-/// The actual arboard write runs inside `spawn_blocking` so it lands
-/// on a dedicated OS thread that survives the tokio-worker rescheduling
-/// (`arboard::Clipboard` holds per-instance OS handles and can race
-/// with the sync daemon's own clipboard-owning thread if two live on
-/// the same tokio runtime).
+/// Dispatches by row kind:
+///   - **text** — pull the decrypted preview, write via the worker.
+///   - **image** — decrypt the `<event_id>.enc` blob, PNG-decode, write
+///     as an ImageData via the worker.
+///   - **bundle** — resolve the inbox folder's top-level entries and
+///     push them onto the OS file clipboard via the worker.
+///
+/// Routing through the clipboard worker (owned by `SyncRunner`) is
+/// what prevents the recopy from triggering a fresh "outgoing" clip
+/// event 500ms later: the worker stamps its own echo-suppression
+/// hashes as it writes, so the next poll sees a match and stays quiet.
+///
+/// If sync isn't currently running, there is no worker — the tray can
+/// offer a text fallback (fresh arboard instance), but images and
+/// bundles need the worker thread's `arboard::Clipboard` for their
+/// OS-specific calls, so they fail clean with an explanatory error.
 #[tauri::command]
-pub async fn cmd_copy_history_text(entry_id: String) -> Result<(), String> {
-    tracing::debug!(entry_id = %entry_id, "cmd_copy_history_text invoked");
-    let text = match rustclip_client::gui_api::history_item_text(&entry_id) {
-        Ok(Some(t)) => t,
-        Ok(None) => {
-            tracing::warn!(
-                entry_id = %entry_id,
-                "history entry not found or not a text row — nothing to copy"
-            );
-            return Err("history entry not found or not text".to_string());
-        }
-        Err(e) => {
-            tracing::error!(entry_id = %entry_id, error = %e, "history_item_text failed");
-            return Err(map_err(e));
-        }
+pub async fn cmd_copy_history_item(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), String> {
+    tracing::debug!(entry_id = %entry_id, "cmd_copy_history_item invoked");
+
+    let kind = rustclip_client::gui_api::history_item_kind(&entry_id)
+        .map_err(map_err)?
+        .ok_or_else(|| "history entry not found".to_string())?;
+
+    // Pull a clone of the clipboard handle out from under the async
+    // Mutex before doing any blocking work — we hold the runner lock
+    // for only a moment.
+    let handle_opt = {
+        let inner = state.lock().await;
+        inner.sync.clipboard()
     };
-    let bytes = text.len();
-    tokio::task::spawn_blocking(move || -> Result<(), String> {
-        let mut cb = Clipboard::new().map_err(|e| format!("clipboard open: {e}"))?;
-        cb.set_text(text).map_err(|e| format!("clipboard write: {e}"))
-    })
-    .await
-    .map_err(|e| format!("clipboard task join: {e}"))??;
-    tracing::info!(entry_id = %entry_id, bytes, "copy-from-history wrote clipboard");
+
+    match kind {
+        HistoryKind::Text => {
+            let text = rustclip_client::gui_api::history_item_text(&entry_id)
+                .map_err(map_err)?
+                .ok_or_else(|| "history entry not found or not text".to_string())?;
+            let bytes = text.len();
+            if let Some(handle) = handle_opt {
+                handle.write_text(text).map_err(map_err)?;
+                tracing::info!(entry_id = %entry_id, bytes, "text recopy via worker");
+            } else {
+                // Fallback: sync isn't running, so there's no worker to
+                // route through. Re-broadcast isn't a concern here
+                // (nothing is polling the clipboard). Use a throwaway
+                // arboard on a dedicated blocking thread so we don't
+                // starve the tokio worker pool.
+                tokio::task::spawn_blocking(move || -> Result<(), String> {
+                    let mut cb = Clipboard::new().map_err(|e| format!("clipboard open: {e}"))?;
+                    cb.set_text(text)
+                        .map_err(|e| format!("clipboard write: {e}"))
+                })
+                .await
+                .map_err(|e| format!("clipboard task join: {e}"))??;
+                tracing::info!(entry_id = %entry_id, bytes, "text recopy via fallback");
+            }
+        }
+        HistoryKind::Image => {
+            let Some(handle) = handle_opt else {
+                return Err("sync must be running to copy an image from history".to_string());
+            };
+            let image = history_item_image(&entry_id)
+                .map_err(map_err)?
+                .ok_or_else(|| "image no longer available in history".to_string())?;
+            let (width, height) = (image.width, image.height);
+            handle.write_image(image).map_err(map_err)?;
+            tracing::info!(entry_id = %entry_id, width, height, "image recopy via worker");
+        }
+        HistoryKind::Bundle => {
+            let Some(handle) = handle_opt else {
+                return Err("sync must be running to copy files from history".to_string());
+            };
+            let paths = history_item_bundle_paths(&entry_id)
+                .map_err(map_err)?
+                .ok_or_else(|| "bundle files no longer available".to_string())?;
+            let count = paths.len();
+            handle.write_file_list(paths).map_err(map_err)?;
+            tracing::info!(entry_id = %entry_id, count, "bundle recopy via worker");
+        }
+    }
+
     Ok(())
+}
+
+/// Deprecated alias for `cmd_copy_history_item`. Older frontend caches
+/// that still call `cmd_copy_history_text` keep working for one release
+/// while the new UI rolls out.
+#[tauri::command]
+pub async fn cmd_copy_history_text(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), String> {
+    // Kept as a thin alias while the frontend cache updates; delegates
+    // directly to the kind-agnostic command.
+    cmd_copy_history_item(state, entry_id).await
 }
 
 #[tauri::command]

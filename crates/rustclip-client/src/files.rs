@@ -340,6 +340,28 @@ pub fn inbox_dir() -> PathBuf {
     base.join("rustclip").join("inbox")
 }
 
+/// Recursively remove the inbox folder for a single event. Used when
+/// history retention evicts a bundle row (or when the whole history is
+/// cleared). A missing directory is treated as success — the next
+/// retention sweep will still see the same (empty) state.
+pub fn remove_inbox_dir(event_id: uuid::Uuid) -> Result<()> {
+    remove_inbox_dir_at(&inbox_dir(), event_id)
+}
+
+/// Like `remove_inbox_dir`, but takes an explicit root path. Factored
+/// out so tests can point it at a tempdir instead of the real
+/// user-wide inbox location.
+pub fn remove_inbox_dir_at(inbox_root: &Path, event_id: uuid::Uuid) -> Result<()> {
+    let dir = inbox_root.join(event_id.to_string());
+    match fs::remove_dir_all(&dir) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => {
+            Err(anyhow::Error::new(e).context(format!("removing inbox dir {}", dir.display())))
+        }
+    }
+}
+
 /// True iff every path in `paths` resolves under the inbox directory.
 /// Used to short-circuit the send-side detection of our own receive-side
 /// pasteboard write without relying on timing.
@@ -434,6 +456,32 @@ mod tests {
     #[test]
     fn pack_rejects_empty() {
         assert!(pack(&[]).is_err());
+    }
+
+    #[test]
+    fn remove_inbox_dir_at_wipes_matching_folder() {
+        let inbox = TempDir::new().unwrap();
+        let id = uuid::Uuid::new_v4();
+        let event_dir = inbox.path().join(id.to_string());
+        fs::create_dir_all(event_dir.join("nested")).unwrap();
+        fs::write(event_dir.join("a.txt"), b"x").unwrap();
+        fs::write(event_dir.join("nested").join("b.txt"), b"y").unwrap();
+
+        remove_inbox_dir_at(inbox.path(), id).unwrap();
+        assert!(!event_dir.exists(), "event dir should be gone");
+        // Sibling dirs for other events survive.
+        let other = inbox.path().join(uuid::Uuid::new_v4().to_string());
+        fs::create_dir_all(&other).unwrap();
+        remove_inbox_dir_at(inbox.path(), id).unwrap(); // idempotent for missing id
+        assert!(other.exists(), "unrelated event dir must not be touched");
+    }
+
+    #[test]
+    fn remove_inbox_dir_at_is_idempotent_for_missing() {
+        let inbox = TempDir::new().unwrap();
+        let id = uuid::Uuid::new_v4();
+        // No directory created. Should succeed silently.
+        remove_inbox_dir_at(inbox.path(), id).unwrap();
     }
 
     #[test]

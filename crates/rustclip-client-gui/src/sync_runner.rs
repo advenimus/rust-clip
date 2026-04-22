@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
+use rustclip_client::clipboard::{self, ClipboardHandle};
 use tauri::{AppHandle, Emitter};
 use tokio::{sync::Mutex, task::JoinHandle};
 use tracing::{info, warn};
@@ -22,6 +23,13 @@ pub struct SyncRunner {
     handle: Mutex<Option<JoinHandle<()>>>,
     watcher: Mutex<Option<JoinHandle<()>>>,
     status: Mutex<SyncStatus>,
+    /// Handle to the clipboard worker thread. Populated in `start()`,
+    /// cleared in `stop()`. Tauri commands and the tray menu clone the
+    /// handle to push `WriteText` / `WriteImage` / `WriteFileList`
+    /// through the same worker that the sync loop uses, so the worker's
+    /// echo-suppression hashes update in lockstep — history recopies
+    /// don't get re-broadcast as fresh outgoing clips.
+    clipboard: std::sync::Mutex<Option<ClipboardHandle>>,
 }
 
 impl Default for SyncRunner {
@@ -36,6 +44,7 @@ impl SyncRunner {
             handle: Mutex::new(None),
             watcher: Mutex::new(None),
             status: Mutex::new(SyncStatus::Stopped),
+            clipboard: std::sync::Mutex::new(None),
         }
     }
 
@@ -47,6 +56,15 @@ impl SyncRunner {
         matches!(self.status().await, SyncStatus::Running)
     }
 
+    /// Returns a clone of the active clipboard handle, or `None` if sync
+    /// isn't currently running. Call sites that want to push to the OS
+    /// clipboard (history-recopy command, tray recent-clips menu) use
+    /// this to route through the one running `arboard::Clipboard`
+    /// instead of spinning up a throwaway instance per call.
+    pub fn clipboard(&self) -> Option<ClipboardHandle> {
+        self.clipboard.lock().ok()?.as_ref().cloned()
+    }
+
     pub async fn start(self: &Arc<Self>, app: AppHandle) -> Result<()> {
         let mut guard = self.handle.lock().await;
         if guard.is_some() {
@@ -55,12 +73,22 @@ impl SyncRunner {
         let ctx = rustclip_client::gui_api::load_sync_context()
             .context("loading sync context; enroll or login first")?;
 
+        // Spawn the clipboard worker here — once — and keep a clone of
+        // the handle on `self` so command handlers can reach it. The
+        // original is moved into `run_sync` and dies with the sync task.
+        let (event_tx, event_rx) = tokio::sync::mpsc::channel(64);
+        let handle = clipboard::spawn_watcher(event_tx).context("spawning clipboard watcher")?;
+        info!("clipboard watcher started");
+        if let Ok(mut slot) = self.clipboard.lock() {
+            *slot = Some(handle.clone());
+        }
+
         let status_cell = Arc::clone(self);
         let emit_app = app.clone();
         let task = tokio::spawn(async move {
             info!("sync task starting");
             status_cell.set_status(&emit_app, SyncStatus::Running).await;
-            match rustclip_client::gui_api::run_sync(ctx).await {
+            match rustclip_client::gui_api::run_sync(ctx, handle, event_rx).await {
                 Ok(()) => {
                     info!("sync exited cleanly");
                     status_cell.set_status(&emit_app, SyncStatus::Stopped).await;
@@ -69,6 +97,12 @@ impl SyncRunner {
                     warn!(error = %e, "sync task errored");
                     status_cell.set_status(&emit_app, SyncStatus::Failed).await;
                 }
+            }
+            // Drop the clipboard handle stored on self when sync exits,
+            // so `clipboard()` correctly reports "no handle available"
+            // and history recopy falls back to its throwaway path.
+            if let Ok(mut slot) = status_cell.clipboard.lock() {
+                *slot = None;
             }
         });
         *guard = Some(task);
@@ -95,6 +129,9 @@ impl SyncRunner {
             task.abort();
         }
         drop(watcher);
+        if let Ok(mut slot) = self.clipboard.lock() {
+            *slot = None;
+        }
         self.set_status(app, SyncStatus::Stopped).await;
         Ok(())
     }

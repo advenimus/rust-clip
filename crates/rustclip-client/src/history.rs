@@ -89,6 +89,12 @@ pub struct HistoryItem {
 pub struct History {
     conn: Connection,
     cipher: Option<XChaCha20Poly1305>,
+    /// Optional on-disk image blob store. Present only when the
+    /// History was opened with the user's content key — the preview
+    /// cipher and the image cipher share one derivation. When absent
+    /// (plaintext-mode history, e.g. logged-out GUI fallback), image
+    /// recopy simply returns "not available".
+    image_store: Option<crate::image_history::ImageHistoryStore>,
 }
 
 impl History {
@@ -114,22 +120,46 @@ impl History {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("creating {}", parent.display()))?;
         }
-        Self::open_with_key(&path, content_key)
+        let image_store = crate::image_history::ImageHistoryStore::open_default(content_key)?;
+        Self::open_with_key_and_image_store(&path, content_key, Some(image_store))
     }
 
     pub fn open(path: &Path) -> Result<Self> {
         let conn = open_connection(path)?;
-        Ok(Self { conn, cipher: None })
+        Ok(Self {
+            conn,
+            cipher: None,
+            image_store: None,
+        })
     }
 
     pub fn open_with_key(path: &Path, content_key: &[u8; 32]) -> Result<Self> {
+        Self::open_with_key_and_image_store(path, content_key, None)
+    }
+
+    /// Test-friendly constructor: caller supplies an explicit
+    /// `ImageHistoryStore` (or `None` to disable image retention
+    /// hooks). Production code goes through `open_default_with_key`
+    /// which opens the store at its default path.
+    pub fn open_with_key_and_image_store(
+        path: &Path,
+        content_key: &[u8; 32],
+        image_store: Option<crate::image_history::ImageHistoryStore>,
+    ) -> Result<Self> {
         let conn = open_connection(path)?;
         let subkey = derive_history_subkey(content_key);
         let cipher = XChaCha20Poly1305::new((&subkey).into());
         Ok(Self {
             conn,
             cipher: Some(cipher),
+            image_store,
         })
+    }
+
+    /// Borrow the image store, if one is attached. `cmd_copy_history_item`
+    /// goes through this to decrypt a past image PNG on demand.
+    pub fn image_store(&self) -> Option<&crate::image_history::ImageHistoryStore> {
+        self.image_store.as_ref()
     }
 
     pub fn record_text(&mut self, direction: Direction, text: &str, event_id: Uuid) -> Result<()> {
@@ -278,20 +308,55 @@ impl History {
     }
 
     pub fn clear(&mut self) -> Result<()> {
+        // Snapshot the bundle-row ids before we drop the table — we
+        // need them to wipe the matching inbox folders after the DELETE
+        // succeeds. Image files are handled by `image_store.clear_all`
+        // which scans the directory directly.
+        let bundle_ids = self
+            .collect_ids_of_kind(HistoryKind::Bundle)
+            .unwrap_or_default();
         self.conn
             .execute("DELETE FROM history_items", [])
             .context("clearing history")?;
+        if let Some(store) = &self.image_store {
+            if let Err(e) = store.clear_all() {
+                tracing::warn!(error = %e, "clearing image-history store");
+            }
+        }
+        for id in bundle_ids {
+            if let Err(e) = crate::files::remove_inbox_dir(id) {
+                tracing::warn!(event_id = %id, error = %e, "removing inbox dir on history clear");
+            }
+        }
         Ok(())
     }
 
     fn enforce_retention(&self, max_items: i64, max_age_ms: i64, now: i64) -> Result<()> {
         let cutoff = now - max_age_ms;
+        // Select the ids + kinds that will be evicted so we can delete
+        // their on-disk companions after the SQL DELETE succeeds. Order
+        // matters: SQL delete first, file cleanup second — best-effort.
+        // If the process dies between the two, we leak files on disk,
+        // which the next `clear_all()` / `clear()` will mop up.
+        let age_evict = self
+            .select_ids_and_kinds_where("created_at < ?", params![cutoff])
+            .unwrap_or_default();
         self.conn
             .execute(
                 "DELETE FROM history_items WHERE created_at < ?",
                 params![cutoff],
             )
             .context("retention: age")?;
+
+        let count_evict = self
+            .select_ids_and_kinds_where(
+                "id IN ( \
+                    SELECT id FROM history_items \
+                    ORDER BY created_at DESC, rowid DESC LIMIT -1 OFFSET ? \
+                 )",
+                params![max_items],
+            )
+            .unwrap_or_default();
         self.conn
             .execute(
                 "DELETE FROM history_items WHERE id IN ( \
@@ -301,7 +366,64 @@ impl History {
                 params![max_items],
             )
             .context("retention: count")?;
+
+        for (id, kind) in age_evict.into_iter().chain(count_evict) {
+            self.cleanup_evicted_payload(id, kind);
+        }
         Ok(())
+    }
+
+    fn collect_ids_of_kind(&self, want: HistoryKind) -> Result<Vec<Uuid>> {
+        let kind_str = want.as_str();
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id FROM history_items WHERE kind = ?")?;
+        let rows: Vec<Vec<u8>> = stmt
+            .query_map(params![kind_str], |row| row.get::<_, Vec<u8>>(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|b| Uuid::from_slice(&b).ok())
+            .collect())
+    }
+
+    fn select_ids_and_kinds_where(
+        &self,
+        where_clause: &str,
+        params: impl rusqlite::Params,
+    ) -> Result<Vec<(Uuid, HistoryKind)>> {
+        let sql = format!("SELECT id, kind FROM history_items WHERE {where_clause}");
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows: Vec<(Vec<u8>, String)> = stmt
+            .query_map(params, |row| {
+                Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<std::result::Result<_, _>>()?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(bytes, kind)| {
+                let id = Uuid::from_slice(&bytes).ok()?;
+                Some((id, HistoryKind::from_db(&kind)))
+            })
+            .collect())
+    }
+
+    fn cleanup_evicted_payload(&self, id: Uuid, kind: HistoryKind) {
+        match kind {
+            HistoryKind::Image => {
+                if let Some(store) = &self.image_store {
+                    if let Err(e) = store.delete(id) {
+                        tracing::warn!(event_id = %id, error = %e, "removing evicted image blob");
+                    }
+                }
+            }
+            HistoryKind::Bundle => {
+                if let Err(e) = crate::files::remove_inbox_dir(id) {
+                    tracing::warn!(event_id = %id, error = %e, "removing evicted inbox dir");
+                }
+            }
+            HistoryKind::Text => {}
+        }
     }
 }
 
@@ -320,7 +442,10 @@ fn open_connection(path: &Path) -> Result<Connection> {
 /// key. Pure SHA-256 with a static tag — not HKDF, but the input is
 /// already a 256-bit random value so one round of hashing is plenty
 /// for separation from the payload cipher.
-fn derive_history_subkey(content_key: &[u8; 32]) -> [u8; 32] {
+///
+/// `pub(crate)` so `image_history` can reuse the same derivation and
+/// keep a single "history subkey" across preview rows and image blobs.
+pub(crate) fn derive_history_subkey(content_key: &[u8; 32]) -> [u8; 32] {
     let mut hasher = Sha256::new();
     hasher.update(b"rustclip.history.v1\0");
     hasher.update(content_key);
@@ -500,5 +625,89 @@ mod tests {
             .unwrap();
         h.clear().unwrap();
         assert!(h.list(10).unwrap().is_empty());
+    }
+
+    /// Helper: opens a `History` with a test-isolated image store
+    /// rooted at a sibling tempdir path. Returns both the DB tmpdir
+    /// and the image-dir tmpdir so the caller can assert against
+    /// on-disk state.
+    fn open_test_with_image_store(key: [u8; 32]) -> (TempDir, TempDir, History) {
+        let db_tmp = TempDir::new().unwrap();
+        let img_tmp = TempDir::new().unwrap();
+        let db_path = db_tmp.path().join("history.db");
+        let store = crate::image_history::ImageHistoryStore::open_at(img_tmp.path(), &key).unwrap();
+        let h = History::open_with_key_and_image_store(&db_path, &key, Some(store)).unwrap();
+        (db_tmp, img_tmp, h)
+    }
+
+    #[test]
+    fn retention_count_deletes_image_blobs_for_evicted_rows() {
+        let key = [42u8; 32];
+        let (_db_tmp, img_tmp, mut h) = open_test_with_image_store(key);
+
+        // Insert 3 image rows and stash a blob per row through the
+        // attached store.
+        let store = h.image_store().cloned().unwrap();
+        let mut ids = Vec::new();
+        for n in 0..3u8 {
+            let id = Uuid::new_v4();
+            h.record_image(Direction::Incoming, 10, 10, 400, id)
+                .unwrap();
+            store.put(id, &[n; 32]).unwrap();
+            ids.push(id);
+        }
+        // All 3 blobs on disk.
+        for id in &ids {
+            assert!(
+                img_tmp.path().join(format!("{id}.enc")).exists(),
+                "expected blob for {id} before retention",
+            );
+        }
+
+        // Keep only the newest 1 item; the 2 older ones should lose
+        // both their SQL row AND their disk blob.
+        h.enforce_retention(1, DEFAULT_MAX_AGE_MS, now_millis())
+            .unwrap();
+        let remaining = h.list(10).unwrap();
+        assert_eq!(remaining.len(), 1);
+        let kept_id = remaining[0].id;
+        for id in &ids {
+            let blob_path = img_tmp.path().join(format!("{id}.enc"));
+            if *id == kept_id {
+                assert!(
+                    blob_path.exists(),
+                    "kept row {id} should still have its blob"
+                );
+            } else {
+                assert!(!blob_path.exists(), "evicted row {id} should have no blob");
+            }
+        }
+    }
+
+    #[test]
+    fn clear_wipes_image_store() {
+        let key = [77u8; 32];
+        let (_db_tmp, img_tmp, mut h) = open_test_with_image_store(key);
+        let store = h.image_store().cloned().unwrap();
+        for _ in 0..4 {
+            let id = Uuid::new_v4();
+            h.record_image(Direction::Outgoing, 1, 1, 100, id).unwrap();
+            store.put(id, b"png-data").unwrap();
+        }
+        let before: Vec<_> = std::fs::read_dir(img_tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert_eq!(before.len(), 4);
+
+        h.clear().unwrap();
+        let after: Vec<_> = std::fs::read_dir(img_tmp.path())
+            .unwrap()
+            .map(|e| e.unwrap().path())
+            .collect();
+        assert!(
+            after.is_empty(),
+            "expected image-history dir empty, got {after:?}"
+        );
     }
 }
