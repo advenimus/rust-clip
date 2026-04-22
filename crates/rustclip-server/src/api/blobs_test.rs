@@ -65,12 +65,18 @@ async fn spawn_app(pool: sqlx::SqlitePool) -> (SocketAddr, TempDir) {
 }
 
 async fn seed_device(pool: &sqlx::SqlitePool) -> String {
+    seed_named_device(pool, "bob").await
+}
+
+async fn seed_named_device(pool: &sqlx::SqlitePool, username: &str) -> String {
     let user_id = Uuid::new_v4();
     query(
         "INSERT INTO users (id, username, display_name, password_hash, is_admin, created_at) \
-         VALUES (?, 'bob', 'Bob', 'dummy', 0, 0)",
+         VALUES (?, ?, ?, 'dummy', 0, 0)",
     )
     .bind(user_id)
+    .bind(username)
+    .bind(username)
     .execute(pool)
     .await
     .unwrap();
@@ -184,6 +190,58 @@ async fn blob_uploads_not_throttled_by_auth_limiter() {
             resp.status()
         );
     }
+}
+
+#[tokio::test]
+async fn cross_user_blob_access_is_denied() {
+    // C1 regression: user A uploads, user B tries to download or delete
+    // that blob. Should 404 in both cases — the existence of the blob
+    // must not leak across user boundaries.
+    let pool = test_pool().await;
+    let token_a = seed_named_device(&pool, "alice").await;
+    let token_b = seed_named_device(&pool, "mallory").await;
+    let (addr, _tmp) = spawn_app(pool).await;
+    let client = reqwest::Client::new();
+
+    let resp = client
+        .post(format!("http://{addr}/api/v1/blobs"))
+        .bearer_auth(&token_a)
+        .header("content-type", "application/octet-stream")
+        .body(vec![9u8; 1024])
+        .send()
+        .await
+        .unwrap();
+    assert!(resp.status().is_success());
+    let upload: BlobUploadResponse = resp.json().await.unwrap();
+
+    // B's token cannot GET A's blob.
+    let forbidden = client
+        .get(format!("http://{addr}/api/v1/blobs/{}", upload.blob_id))
+        .bearer_auth(&token_b)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(forbidden.status(), 404);
+
+    // B's token cannot DELETE A's blob. We accept 204 here (per the
+    // handler's behavior of not leaking existence) but the row must
+    // still be present afterward.
+    let delete_try = client
+        .delete(format!("http://{addr}/api/v1/blobs/{}", upload.blob_id))
+        .bearer_auth(&token_b)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(delete_try.status(), 204);
+
+    // A should still be able to download — the row survived.
+    let still_there = client
+        .get(format!("http://{addr}/api/v1/blobs/{}", upload.blob_id))
+        .bearer_auth(&token_a)
+        .send()
+        .await
+        .unwrap();
+    assert!(still_there.status().is_success());
 }
 
 #[tokio::test]

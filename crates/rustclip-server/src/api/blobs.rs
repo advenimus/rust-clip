@@ -143,10 +143,12 @@ async fn upload(
     let storage_path_str = storage_path.to_string_lossy().into_owned();
 
     let res = sqlx::query(
-        "INSERT INTO blobs (id, sha256, byte_length, storage_path, created_at, expires_at) \
-         VALUES (?, ?, ?, ?, ?, ?)",
+        "INSERT INTO blobs \
+         (id, user_id, sha256, byte_length, storage_path, created_at, expires_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(blob_id)
+    .bind(auth.user_id)
     .bind(&sha_hex)
     .bind(written as i64)
     .bind(&storage_path_str)
@@ -185,13 +187,18 @@ struct BlobRow {
 
 async fn download(
     State(state): State<AppState>,
-    _auth: DeviceAuth,
+    auth: DeviceAuth,
     Path(blob_id): Path<Uuid>,
 ) -> Result<Response, ApiError> {
+    // Scope to the caller's user_id so one token cannot pull another
+    // user's blob even if the UUID is somehow observed. Pre-migration
+    // rows may still have NULL user_id, in which case we refuse.
     let row = sqlx::query_as::<_, BlobRow>(
-        "SELECT sha256, byte_length, storage_path FROM blobs WHERE id = ?",
+        "SELECT sha256, byte_length, storage_path \
+         FROM blobs WHERE id = ? AND user_id = ?",
     )
     .bind(blob_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await?
     .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "blob not found"))?;
@@ -219,13 +226,19 @@ async fn download(
 
 async fn remove(
     State(state): State<AppState>,
-    _auth: DeviceAuth,
+    auth: DeviceAuth,
     Path(blob_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    // Look up scoped to the caller's user_id so cross-user DELETE
+    // returns 204 without ever touching the row. The 204-for-missing
+    // response intentionally matches the pre-existing behavior so an
+    // attacker can't tell "someone else owns this" from "never existed".
     let row = sqlx::query_as::<_, BlobRow>(
-        "SELECT sha256, byte_length, storage_path FROM blobs WHERE id = ?",
+        "SELECT sha256, byte_length, storage_path \
+         FROM blobs WHERE id = ? AND user_id = ?",
     )
     .bind(blob_id)
+    .bind(auth.user_id)
     .fetch_optional(&state.db)
     .await?;
 
@@ -233,8 +246,9 @@ async fn remove(
         return Ok(StatusCode::NO_CONTENT);
     };
 
-    sqlx::query("DELETE FROM blobs WHERE id = ?")
+    sqlx::query("DELETE FROM blobs WHERE id = ? AND user_id = ?")
         .bind(blob_id)
+        .bind(auth.user_id)
         .execute(&state.db)
         .await?;
     if let Err(e) = fs::remove_file(&row.storage_path).await {
