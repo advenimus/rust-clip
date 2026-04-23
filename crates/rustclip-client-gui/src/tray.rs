@@ -16,11 +16,14 @@ const TRAY_ID: &str = "rustclip-tray";
 
 pub fn install(app: &AppHandle) -> Result<()> {
     // macOS menu bar: white template icon that the OS auto-inverts per light/dark bar.
-    // Windows / Linux taskbars do not honor template mode, so ship the orange brand
-    // icon — legible on both light and dark taskbars.
+    // Windows: black-backed variant with orange arrows — stays visible on both
+    // light and dark taskbars where the plain orange mark was hard to pick out.
+    // Linux: orange brand icon.
     #[cfg(target_os = "macos")]
     let icon_bytes: &[u8] = include_bytes!("../icons/logo-white.png");
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    let icon_bytes: &[u8] = include_bytes!("../icons/logo-windows-tray.png");
+    #[cfg(all(not(target_os = "macos"), not(target_os = "windows")))]
     let icon_bytes: &[u8] = include_bytes!("../icons/logo-color.png");
 
     let icon = Image::from_bytes(icon_bytes)?;
