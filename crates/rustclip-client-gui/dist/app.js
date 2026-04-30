@@ -210,6 +210,11 @@
     const autoSyncMaxMb = document.getElementById('auto-sync-max-mb');
     const autoSyncMaxSave = document.getElementById('auto-sync-max-save');
     const notificationsToggle = document.getElementById('notifications-toggle');
+    const clipboardGuardToggle = document.getElementById('clipboard-guard-toggle');
+    const clipboardGuardSeconds = document.getElementById('clipboard-guard-seconds');
+    const clipboardGuardSave = document.getElementById('clipboard-guard-save');
+    const recopyHotkey = document.getElementById('recopy-hotkey');
+    const recopyHotkeySave = document.getElementById('recopy-hotkey-save');
     const settingsMsg = document.getElementById('settings-msg');
 
     function setSettingsMsg(text, cls = '') {
@@ -224,22 +229,38 @@
         autoSyncFilesToggle.checked = !!cfg.auto_sync_files;
         autoSyncMaxMb.value = Math.max(1, Math.round(cfg.auto_sync_max_bytes / (1024 * 1024)));
         notificationsToggle.checked = !!cfg.notifications_enabled;
+        clipboardGuardToggle.checked = !!cfg.clipboard_guard_enabled;
+        clipboardGuardSeconds.value = clampGuardSeconds(cfg.clipboard_guard_seconds);
+        recopyHotkey.value = cfg.recopy_hotkey || '';
       } catch (err) {
         setSettingsMsg(String(err), 'err');
       }
     }
 
+    function clampGuardSeconds(v) {
+      const n = parseInt(v, 10);
+      if (!Number.isFinite(n) || n < 1) return 5;
+      if (n > 30) return 30;
+      return n;
+    }
+
     async function saveClientConfig(okMessage) {
       const mb = Math.max(1, parseInt(autoSyncMaxMb.value, 10) || 500);
+      const guardSeconds = clampGuardSeconds(clipboardGuardSeconds.value);
       try {
         const updated = await invoke('cmd_set_client_config', {
           config: {
             auto_sync_files: autoSyncFilesToggle.checked,
             auto_sync_max_bytes: mb * 1024 * 1024,
             notifications_enabled: notificationsToggle.checked,
+            clipboard_guard_enabled: clipboardGuardToggle.checked,
+            clipboard_guard_seconds: guardSeconds,
+            recopy_hotkey: recopyHotkey.value.trim(),
           },
         });
         autoSyncMaxMb.value = Math.max(1, Math.round(updated.auto_sync_max_bytes / (1024 * 1024)));
+        clipboardGuardSeconds.value = clampGuardSeconds(updated.clipboard_guard_seconds);
+        recopyHotkey.value = updated.recopy_hotkey || '';
         setSettingsMsg(okMessage || 'Saved.', 'ok');
       } catch (err) {
         setSettingsMsg(String(err), 'err');
@@ -261,6 +282,23 @@
       if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
     });
     notificationsToggle.addEventListener('change', () => saveClientConfig());
+    clipboardGuardToggle.addEventListener('change', () => saveClientConfig());
+    clipboardGuardSave.addEventListener('click', () => saveClientConfig());
+    clipboardGuardSeconds.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
+    });
+    recopyHotkeySave.addEventListener('click', () => saveClientConfig());
+    recopyHotkey.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
+    });
+
+    // Surface registration failures from the backend (invalid combo,
+    // already-claimed combo, etc.). The save itself still goes through —
+    // the user just needs to pick a different combo.
+    listen('recopy-hotkey-error', (evt) => {
+      const detail = evt && evt.payload ? String(evt.payload) : 'unknown error';
+      setSettingsMsg('Could not register shortcut: ' + detail, 'err');
+    });
 
     // ---- History panel ----
     const historyList = document.getElementById('history-list');

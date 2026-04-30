@@ -15,6 +15,7 @@
     "notification:default",
     "dialog:default",
     "opener:default",
-    "autostart:default"
+    "autostart:default",
+    "global-shortcut:default"
   ]
 }

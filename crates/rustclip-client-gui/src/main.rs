@@ -9,6 +9,7 @@
 
 mod commands;
 mod history_watcher;
+mod hotkey;
 mod sync_runner;
 mod tray;
 mod updater;
@@ -42,6 +43,20 @@ fn main() {
             None,
         ))
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(
+            tauri_plugin_global_shortcut::Builder::new()
+                .with_handler(|app, _shortcut, event| {
+                    // Only one shortcut is ever registered (the recopy
+                    // shortcut), so any "Pressed" event means re-copy.
+                    if event.state() == tauri_plugin_global_shortcut::ShortcutState::Pressed {
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            hotkey::on_press(app).await;
+                        });
+                    }
+                })
+                .build(),
+        )
         .manage(app_state.clone())
         .setup(move |app| {
             // Menu-bar-only on macOS: no dock tile, no application menu,
@@ -51,6 +66,11 @@ fn main() {
             app.set_activation_policy(tauri::ActivationPolicy::Accessory);
 
             tray::install(app.handle())?;
+
+            // Register the configured re-copy global shortcut. Errors
+            // are non-fatal — the user can always click the tray menu
+            // or History window instead.
+            hotkey::register_from_config(app.handle());
 
             // If already enrolled, spin sync up on launch.
             let handle = app.handle().clone();

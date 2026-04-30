@@ -113,7 +113,17 @@ pub async fn cmd_copy_history_item(
     state: tauri::State<'_, AppState>,
     entry_id: String,
 ) -> Result<(), String> {
-    tracing::debug!(entry_id = %entry_id, "cmd_copy_history_item invoked");
+    copy_history_item(state, entry_id).await
+}
+
+/// Non-command implementation of `cmd_copy_history_item`. Exposed so
+/// other call sites (the global recopy hotkey, the tray submenu) can
+/// reuse the same dispatch without round-tripping through the IPC layer.
+pub async fn copy_history_item(
+    state: tauri::State<'_, AppState>,
+    entry_id: String,
+) -> Result<(), String> {
+    tracing::debug!(entry_id = %entry_id, "copy_history_item invoked");
 
     let kind = rustclip_client::gui_api::history_item_kind(&entry_id)
         .map_err(map_err)?
@@ -321,6 +331,14 @@ pub async fn cmd_get_client_config() -> Result<ClientConfigView, String> {
 }
 
 #[tauri::command]
-pub async fn cmd_set_client_config(config: ClientConfigView) -> Result<ClientConfigView, String> {
-    set_client_config(config).map_err(map_err)
+pub async fn cmd_set_client_config(
+    app: AppHandle,
+    config: ClientConfigView,
+) -> Result<ClientConfigView, String> {
+    let updated = set_client_config(config).map_err(map_err)?;
+    // Re-register the hotkey from the saved-and-normalized value so
+    // an empty string clears the registration and an invalid combo
+    // surfaces a `recopy-hotkey-error` event for the UI.
+    crate::hotkey::re_register(&app, &updated.recopy_hotkey);
+    Ok(updated)
 }

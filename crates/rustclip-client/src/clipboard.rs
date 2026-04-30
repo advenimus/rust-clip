@@ -47,13 +47,84 @@ pub struct ImageBytes {
     pub rgba: Vec<u8>,
 }
 
+/// Caller-supplied request to "guard" a text write — re-assert it onto
+/// the OS clipboard for `seconds` if the clipboard goes empty before
+/// the user pastes. Specifically scoped to the receive path for
+/// nested-VDI scenarios; the manual recopy paths (tray menu, hotkey)
+/// pass `None`.
+#[derive(Debug, Clone, Copy)]
+pub struct GuardSpec {
+    pub seconds: u32,
+    pub max_attempts: u8,
+}
+
 #[allow(dead_code)]
 #[derive(Debug)]
 pub enum ClipboardCmd {
-    WriteText(String),
+    WriteText {
+        text: String,
+        guard: Option<GuardSpec>,
+    },
     WriteImage(ImageBytes),
     WriteFileList(Vec<PathBuf>),
     Shutdown,
+}
+
+/// Active guard state on the worker thread. We re-write `content` if a
+/// poll tick within the window finds the OS clipboard empty.
+#[derive(Clone)]
+struct GuardEntry {
+    content: String,
+    content_hash: [u8; 32],
+    expires_at: Instant,
+    attempts_left: u8,
+}
+
+/// What the worker should do with the active guard on the current poll
+/// tick. Pure decision so it can be unit-tested without touching the
+/// real OS clipboard.
+#[derive(Debug, PartialEq, Eq)]
+enum GuardDecision {
+    /// No-op — guard stays armed.
+    Keep,
+    /// Drop the guard (expired, attempts exhausted, or user copied
+    /// something else).
+    Drop,
+    /// Re-write `content` to the clipboard and decrement
+    /// `attempts_left`. The caller also restamps echo-suppression
+    /// hashes and skips the rest of the poll tick.
+    Reassert,
+}
+
+fn evaluate_guard(
+    g: &GuardEntry,
+    read_result: &std::result::Result<String, arboard::Error>,
+    now: Instant,
+) -> GuardDecision {
+    if now >= g.expires_at {
+        return GuardDecision::Drop;
+    }
+    let cb_empty = match read_result {
+        Ok(s) => s.is_empty(),
+        Err(arboard::Error::ContentNotAvailable) => true,
+        Err(_) => false,
+    };
+    if cb_empty {
+        return if g.attempts_left > 0 {
+            GuardDecision::Reassert
+        } else {
+            GuardDecision::Drop
+        };
+    }
+    if let Ok(text) = read_result {
+        if !text.is_empty() {
+            let hash = sha256(text.as_bytes());
+            if hash != g.content_hash {
+                return GuardDecision::Drop;
+            }
+        }
+    }
+    GuardDecision::Keep
 }
 
 /// Sender half of the clipboard worker channel. Cheap to clone —
@@ -69,7 +140,20 @@ pub struct ClipboardHandle {
 impl ClipboardHandle {
     pub fn write_text(&self, text: String) -> Result<()> {
         self.cmd_tx
-            .send(ClipboardCmd::WriteText(text))
+            .send(ClipboardCmd::WriteText { text, guard: None })
+            .context("clipboard worker shut down")
+    }
+
+    /// Like `write_text` but arms the empty-clipboard guard so the
+    /// worker re-asserts the same content for `guard.seconds` if a
+    /// third party (VDI clipboard channel etc.) clears the clipboard
+    /// before the user pastes.
+    pub fn write_text_guarded(&self, text: String, guard: GuardSpec) -> Result<()> {
+        self.cmd_tx
+            .send(ClipboardCmd::WriteText {
+                text,
+                guard: Some(guard),
+            })
             .context("clipboard worker shut down")
     }
 
@@ -123,18 +207,41 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
     let mut last_read_files: Option<[u8; 32]> = None;
     let mut last_set_files: Option<[u8; 32]> = None;
     let mut last_files_write_at: Option<Instant> = None;
+    let mut guard_text: Option<GuardEntry> = None;
 
     loop {
         // Drain pending commands first.
         loop {
             match cmd_rx.try_recv() {
-                Ok(ClipboardCmd::WriteText(text)) => {
+                Ok(ClipboardCmd::WriteText { text, guard }) => {
                     let hash = sha256(text.as_bytes());
+                    let text_for_guard = if guard.is_some() {
+                        Some(text.clone())
+                    } else {
+                        None
+                    };
                     if let Err(e) = cb.set_text(text) {
                         warn!(error = %e, "clipboard write failed");
                     } else {
                         last_set = Some(hash);
                         last_read = Some(hash);
+                        // Arm the guard atomically with last_set so a
+                        // re-assert tick can't see the new hash without
+                        // also seeing the guard.
+                        if let (Some(spec), Some(content)) = (guard, text_for_guard) {
+                            guard_text = Some(GuardEntry {
+                                content,
+                                content_hash: hash,
+                                expires_at: Instant::now()
+                                    + Duration::from_secs(spec.seconds as u64),
+                                attempts_left: spec.max_attempts,
+                            });
+                        } else {
+                            // A non-guarded write (manual recopy etc.)
+                            // implicitly cancels any prior guard — the
+                            // user is moving on.
+                            guard_text = None;
+                        }
                     }
                 }
                 Ok(ClipboardCmd::WriteImage(image)) => {
@@ -239,8 +346,50 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
             continue;
         }
 
-        // Poll text second.
-        match cb.get_text() {
+        // Poll text second. Read once and reuse the result for guard
+        // handling so a transient third-party clipboard clear can't
+        // race between the guard's empty-check and the normal poll.
+        let read_result = cb.get_text();
+
+        // Guard pass: re-assert our last write if the clipboard has
+        // gone empty within the window. Runs BEFORE the normal poll so
+        // a re-assert never emits a watcher event (the next tick sees
+        // last_set match the re-asserted hash and stays quiet).
+        if let Some(g) = guard_text.as_mut() {
+            match evaluate_guard(g, &read_result, Instant::now()) {
+                GuardDecision::Keep => {}
+                GuardDecision::Drop => {
+                    guard_text = None;
+                }
+                GuardDecision::Reassert => {
+                    g.attempts_left -= 1;
+                    let attempts_left = g.attempts_left;
+                    let hash = g.content_hash;
+                    let content = g.content.clone();
+                    match cb.set_text(content) {
+                        Ok(()) => {
+                            last_set = Some(hash);
+                            last_read = Some(hash);
+                            debug!(
+                                attempts_left,
+                                "clipboard guard re-asserted after empty-clipboard tick"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(error = %e, "clipboard guard re-assert failed");
+                            guard_text = None;
+                        }
+                    }
+                    // Don't fall through to the normal text / image
+                    // poll for this tick — we just wrote, the next
+                    // read would see our own content.
+                    thread::sleep(POLL_INTERVAL);
+                    continue;
+                }
+            }
+        }
+
+        match read_result {
             Ok(text) if !text.is_empty() => {
                 let hash = sha256(text.as_bytes());
                 let already_read = last_read == Some(hash);
@@ -313,4 +462,97 @@ fn hash_image(image: &ImageBytes) -> [u8; 32] {
     hasher.update((image.height as u64).to_le_bytes());
     hasher.update(&image.rgba);
     hasher.finalize().into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn guard_with(content: &str, expires_in: Duration, attempts_left: u8) -> GuardEntry {
+        GuardEntry {
+            content: content.to_string(),
+            content_hash: sha256(content.as_bytes()),
+            expires_at: Instant::now() + expires_in,
+            attempts_left,
+        }
+    }
+
+    /// Within the window, attempts left, clipboard reads as empty
+    /// (`Ok("")`): caller should re-assert. The clearer-as-error case
+    /// (`ContentNotAvailable`) is treated as empty too.
+    #[test]
+    fn guard_re_asserts_when_cleared_to_empty() {
+        let g = guard_with("hello", Duration::from_secs(5), 3);
+        let now = Instant::now();
+        assert_eq!(
+            evaluate_guard(&g, &Ok(String::new()), now),
+            GuardDecision::Reassert
+        );
+        assert_eq!(
+            evaluate_guard(&g, &Err(arboard::Error::ContentNotAvailable), now),
+            GuardDecision::Reassert
+        );
+    }
+
+    /// User copies something else within the window: drop the guard so
+    /// we never fight a real copy. Guard kept alive when the same
+    /// content is still on the clipboard (our own write echoing back).
+    #[test]
+    fn guard_clears_on_user_overwrite() {
+        let g = guard_with("hello", Duration::from_secs(5), 3);
+        let now = Instant::now();
+        assert_eq!(
+            evaluate_guard(&g, &Ok("a different copy".into()), now),
+            GuardDecision::Drop
+        );
+        // Same content still present → keep the guard alive.
+        assert_eq!(
+            evaluate_guard(&g, &Ok("hello".into()), now),
+            GuardDecision::Keep
+        );
+    }
+
+    /// Past the expiry the guard is dropped regardless of clipboard
+    /// state — including the empty-with-attempts-left case where it
+    /// would otherwise re-assert.
+    #[test]
+    fn guard_clears_on_window_expiry() {
+        let g = guard_with("hello", Duration::from_millis(0), 3);
+        let now = Instant::now() + Duration::from_millis(1);
+        assert_eq!(
+            evaluate_guard(&g, &Ok(String::new()), now),
+            GuardDecision::Drop
+        );
+        assert_eq!(
+            evaluate_guard(&g, &Ok("hello".into()), now),
+            GuardDecision::Drop
+        );
+    }
+
+    /// With zero attempts remaining, an empty clipboard tick drops the
+    /// guard rather than re-asserting indefinitely.
+    #[test]
+    fn guard_caps_re_assertions() {
+        let g = guard_with("hello", Duration::from_secs(5), 0);
+        let now = Instant::now();
+        assert_eq!(
+            evaluate_guard(&g, &Ok(String::new()), now),
+            GuardDecision::Drop
+        );
+    }
+
+    /// Non-Empty / non-ContentNotAvailable read errors are treated as
+    /// "unknown state": don't re-assert and don't drop. We wait for
+    /// the next tick rather than fighting a transient read failure.
+    #[test]
+    fn guard_keeps_on_transient_read_error() {
+        let g = guard_with("hello", Duration::from_secs(5), 3);
+        let err: std::result::Result<String, arboard::Error> = Err(arboard::Error::Unknown {
+            description: "transient".into(),
+        });
+        assert_eq!(
+            evaluate_guard(&g, &err, Instant::now()),
+            GuardDecision::Keep
+        );
+    }
 }

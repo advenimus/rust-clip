@@ -92,6 +92,28 @@
         </label>
         <p class="muted-note">Clipboard history always updates in the background. This toggle only controls the OS toast.</p>
       </div>
+      <div class="settings-group">
+        <h3>Clipboard guard</h3>
+        <label class="checkbox">
+          <input type="checkbox" id="clipboard-guard-toggle"> Re-assert clipboard if cleared after sync
+        </label>
+        <label class="inline-number">
+          Re-assert window:
+          <input type="number" id="clipboard-guard-seconds" min="1" max="30" step="1">
+          seconds
+          <button id="clipboard-guard-save" class="btn btn-ghost">Save</button>
+        </label>
+        <p class="muted-note">For VDI / nested remote-desktop scenarios where the clipboard sometimes goes blank after RustClip writes to it. RustClip will only re-write if the clipboard is empty, so this never fights a real copy. Capped at 3 re-assertions per clip.</p>
+      </div>
+      <div class="settings-group">
+        <h3>Re-copy last clip shortcut</h3>
+        <label class="inline-number">
+          Global shortcut:
+          <input type="text" id="recopy-hotkey" placeholder="e.g. CmdOrCtrl+Shift+R" autocomplete="off" spellcheck="false">
+          <button id="recopy-hotkey-save" class="btn btn-ghost">Save</button>
+        </label>
+        <p class="muted-note">Press this anywhere on your system to re-copy the most recent received clip onto the OS clipboard. Useful when paste fails (e.g. a remote desktop cleared the clipboard). Leave blank to disable.</p>
+      </div>
       <div id="settings-msg" class="status"></div>
     </section>
 

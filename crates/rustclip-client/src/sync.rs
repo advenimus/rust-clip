@@ -28,7 +28,7 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    clipboard::{ClipEvent, ClipboardHandle},
+    clipboard::{ClipEvent, ClipboardHandle, GuardSpec},
     config::ClientConfig,
     crypto::Cipher,
     files::{self, FileBundle, PackError},
@@ -36,6 +36,13 @@ use crate::{
     http::ServerClient,
     image_codec,
 };
+
+/// Hardcoded cap on how many times the clipboard worker will re-assert
+/// our last write inside a single guard window. Three is comfortably
+/// more than any real "focus event clears clipboard" race needs and
+/// short enough that a runaway clearer (security software, broken VDI
+/// channel) doesn't burn CPU forever.
+const GUARD_MAX_ATTEMPTS: u8 = 3;
 
 const RECONNECT_INITIAL: Duration = Duration::from_millis(500);
 const RECONNECT_MAX: Duration = Duration::from_secs(30);
@@ -644,7 +651,20 @@ async fn apply_incoming(
                 event_id = %event.id,
                 "received text clip"
             );
-            clipboard.write_text(text.clone())?;
+            // Read config fresh so a settings change picks up on the
+            // next clip without restarting the daemon.
+            let cfg = ClientConfig::load().unwrap_or_default();
+            if cfg.clipboard_guard_enabled {
+                clipboard.write_text_guarded(
+                    text.clone(),
+                    GuardSpec {
+                        seconds: cfg.clipboard_guard_seconds,
+                        max_attempts: GUARD_MAX_ATTEMPTS,
+                    },
+                )?;
+            } else {
+                clipboard.write_text(text.clone())?;
+            }
             if let Ok(mut h) = history.lock() {
                 let _ = h.record_text(Direction::Incoming, &text, event.id);
             }
