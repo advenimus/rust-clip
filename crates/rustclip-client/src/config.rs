@@ -24,6 +24,36 @@ pub const GUARD_SECONDS_MIN: u32 = 1;
 pub const GUARD_SECONDS_MAX: u32 = 30;
 pub const DEFAULT_RECOPY_HOTKEY: &str = "CmdOrCtrl+Shift+R";
 
+/// Tri-state behavior for the receive-side clipboard re-assert
+/// mechanism. Replaces the old boolean `clipboard_guard_enabled`.
+///
+/// - **Off** — never re-assert. Safe default.
+/// - **EmptyOnly** — re-assert if the OS clipboard goes empty within
+///   the window. Legacy behavior; safe (never fights a real copy).
+/// - **Aggressive** — also re-assert when the clipboard contents
+///   change to a hash that matches a recent inbound clip. Defends
+///   against stale-direction stomps from single-direction channels
+///   like nested Citrix / RDP. Small risk of re-asserting your own
+///   identical re-copy — documented in `docs/threat-model.md`.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum GuardMode {
+    #[default]
+    Off,
+    EmptyOnly,
+    Aggressive,
+}
+
+impl GuardMode {
+    pub fn is_active(self) -> bool {
+        !matches!(self, GuardMode::Off)
+    }
+
+    pub fn is_aggressive(self) -> bool {
+        matches!(self, GuardMode::Aggressive)
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClientConfig {
     /// If true, the sync watcher picks up file copies from Finder /
@@ -40,11 +70,15 @@ pub struct ClientConfig {
     /// regardless.
     #[serde(default = "default_notifications_enabled")]
     pub notifications_enabled: bool,
-    /// If true, the receive side will re-assert its last write to the
-    /// OS clipboard whenever the clipboard goes empty within
-    /// `clipboard_guard_seconds`. Workaround for nested
-    /// remote-desktop / VDI scenarios where a third-party clipboard
-    /// channel clears the clipboard right after our write.
+    /// Tri-state guard. See [`GuardMode`]. The legacy bool
+    /// `clipboard_guard_enabled` is still read for backwards
+    /// compatibility and migrated into this field by [`Self::normalize`].
+    #[serde(default)]
+    pub clipboard_guard_mode: GuardMode,
+    /// Legacy bool, kept for backwards compatibility with TOML files
+    /// written by older releases. Mirrors `clipboard_guard_mode != Off`
+    /// after [`Self::normalize`] runs; written back so an older app
+    /// version reading the new file still sees a meaningful value.
     #[serde(default = "default_clipboard_guard_enabled")]
     pub clipboard_guard_enabled: bool,
     /// How long, in seconds, to keep watching for an empty clipboard
@@ -85,6 +119,7 @@ impl Default for ClientConfig {
             auto_sync_files: default_auto_sync_files(),
             auto_sync_max_bytes: default_auto_sync_max_bytes(),
             notifications_enabled: default_notifications_enabled(),
+            clipboard_guard_mode: GuardMode::default(),
             clipboard_guard_enabled: default_clipboard_guard_enabled(),
             clipboard_guard_seconds: default_clipboard_guard_seconds(),
             recopy_hotkey: default_recopy_hotkey(),
@@ -93,13 +128,27 @@ impl Default for ClientConfig {
 }
 
 impl ClientConfig {
-    /// Coerce out-of-range numeric fields back into supported bounds.
-    /// Called on every load and every save so a hand-edited TOML file
-    /// can't push the guard window outside `[1, 30]`.
+    /// Coerce out-of-range numeric fields back into supported bounds,
+    /// and reconcile the legacy `clipboard_guard_enabled` bool with the
+    /// new `clipboard_guard_mode` tri-state. Migration rule:
+    /// - If `clipboard_guard_mode` is non-Off, the bool is derived
+    ///   from it (`mode.is_active()`).
+    /// - If `clipboard_guard_mode == Off` but the legacy bool is
+    ///   `true`, that means a TOML written by an older release —
+    ///   migrate by setting mode to `EmptyOnly`.
+    /// - Otherwise both stay at their defaults (Off / false).
+    ///
+    /// Called on every load and every save so a hand-edited TOML
+    /// can't push the guard window outside `[1, 30]` and the two
+    /// fields can't drift.
     fn normalize(&mut self) {
         self.clipboard_guard_seconds = self
             .clipboard_guard_seconds
             .clamp(GUARD_SECONDS_MIN, GUARD_SECONDS_MAX);
+        if matches!(self.clipboard_guard_mode, GuardMode::Off) && self.clipboard_guard_enabled {
+            self.clipboard_guard_mode = GuardMode::EmptyOnly;
+        }
+        self.clipboard_guard_enabled = self.clipboard_guard_mode.is_active();
     }
 }
 
@@ -153,6 +202,7 @@ mod tests {
         assert!(cfg.auto_sync_files);
         assert_eq!(cfg.auto_sync_max_bytes, DEFAULT_AUTO_BUNDLE_CAP_BYTES);
         assert!(cfg.notifications_enabled);
+        assert_eq!(cfg.clipboard_guard_mode, GuardMode::Off);
         assert!(!cfg.clipboard_guard_enabled);
         assert_eq!(cfg.clipboard_guard_seconds, 5);
         assert_eq!(cfg.recopy_hotkey, DEFAULT_RECOPY_HOTKEY);
@@ -166,6 +216,7 @@ mod tests {
             auto_sync_files: false,
             auto_sync_max_bytes: 42,
             notifications_enabled: false,
+            clipboard_guard_mode: GuardMode::Aggressive,
             clipboard_guard_enabled: true,
             clipboard_guard_seconds: 10,
             recopy_hotkey: "Ctrl+Shift+P".into(),
@@ -175,6 +226,7 @@ mod tests {
         assert!(!loaded.auto_sync_files);
         assert_eq!(loaded.auto_sync_max_bytes, 42);
         assert!(!loaded.notifications_enabled);
+        assert_eq!(loaded.clipboard_guard_mode, GuardMode::Aggressive);
         assert!(loaded.clipboard_guard_enabled);
         assert_eq!(loaded.clipboard_guard_seconds, 10);
         assert_eq!(loaded.recopy_hotkey, "Ctrl+Shift+P");
@@ -189,9 +241,62 @@ mod tests {
         assert!(!loaded.auto_sync_files);
         assert_eq!(loaded.auto_sync_max_bytes, DEFAULT_AUTO_BUNDLE_CAP_BYTES);
         assert!(loaded.notifications_enabled);
+        assert_eq!(loaded.clipboard_guard_mode, GuardMode::Off);
         assert!(!loaded.clipboard_guard_enabled);
         assert_eq!(loaded.clipboard_guard_seconds, 5);
         assert_eq!(loaded.recopy_hotkey, DEFAULT_RECOPY_HOTKEY);
+    }
+
+    #[test]
+    fn legacy_clipboard_guard_enabled_true_migrates_to_empty_only() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy.toml");
+        // Simulates a TOML written by PR2-or-earlier: only the legacy
+        // bool, no clipboard_guard_mode field.
+        fs::write(&path, "clipboard_guard_enabled = true\n").unwrap();
+        let loaded = ClientConfig::load_from(&path).unwrap();
+        assert_eq!(loaded.clipboard_guard_mode, GuardMode::EmptyOnly);
+        assert!(loaded.clipboard_guard_enabled);
+    }
+
+    #[test]
+    fn legacy_clipboard_guard_enabled_false_stays_off() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("legacy_false.toml");
+        fs::write(&path, "clipboard_guard_enabled = false\n").unwrap();
+        let loaded = ClientConfig::load_from(&path).unwrap();
+        assert_eq!(loaded.clipboard_guard_mode, GuardMode::Off);
+        assert!(!loaded.clipboard_guard_enabled);
+    }
+
+    #[test]
+    fn explicit_clipboard_guard_mode_wins_over_legacy_bool() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("explicit.toml");
+        fs::write(
+            &path,
+            "clipboard_guard_enabled = true\nclipboard_guard_mode = \"aggressive\"\n",
+        )
+        .unwrap();
+        let loaded = ClientConfig::load_from(&path).unwrap();
+        assert_eq!(loaded.clipboard_guard_mode, GuardMode::Aggressive);
+        assert!(loaded.clipboard_guard_enabled);
+    }
+
+    #[test]
+    fn save_keeps_legacy_bool_in_sync_with_mode() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("sync.toml");
+        let cfg = ClientConfig {
+            clipboard_guard_mode: GuardMode::Aggressive,
+            clipboard_guard_enabled: false, // stale, should be normalized
+            ..ClientConfig::default()
+        };
+        cfg.save_to(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        // Normalize should have flipped the bool true during save.
+        assert!(text.contains("clipboard_guard_enabled = true"));
+        assert!(text.contains("clipboard_guard_mode = \"aggressive\""));
     }
 
     #[test]

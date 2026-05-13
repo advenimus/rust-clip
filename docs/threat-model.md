@@ -70,6 +70,18 @@ This document captures the security posture of RustClip as of Phase 8 hardening.
 
 - **Mitigation:** On SIGTERM or Ctrl-C, the server drains in-flight requests, checkpoints the SQLite WAL (`PRAGMA wal_checkpoint(TRUNCATE)`), and closes the pool before exit.
 
+## Clipboard guard — aggressive mode trade-off
+
+The receive-side clipboard guard re-asserts a freshly-received clip onto the OS clipboard when an external single-direction channel (Citrix host→guest, RDP guest tools, some VDI clients) stomps the paste. The user controls the behavior via a tri-state config:
+
+- **Off** — never re-write. Safe default.
+- **EmptyOnly** — re-write only if the OS clipboard goes empty within the window. Never fights a real copy because it only fires on empty. Safe in any environment.
+- **Aggressive** — also re-write if the clipboard contents change to a hash that matches a recently-received inbound clip (within a 30-second ring buffer of the last 8 inbound hashes per content type). Intended for nested-VDI scenarios where both ends run RustClip and the host→guest channel can't be disabled.
+
+**Residual risk in aggressive mode:** if the user, within 30 s of receiving clip X, deliberately re-copies the same content X on the local machine, the guard MAY interpret the second copy as a stale-direction stomp and overwrite it with X (which is the same content — net no harm). The risk is meaningful only if X and the user's NEW copy share a hash by coincidence: astronomically unlikely for text (256-bit SHA-2 collision), plausible for tiny identical images (e.g., a 32×32 status icon copied from one place and then again from another). The user can always re-copy or fall back to **EmptyOnly** if this becomes a problem. The guard is hard-capped at 3 re-assertions per clip so a runaway match can't burn CPU.
+
+**Why a ring buffer rather than a single "last received" entry:** in a chatty session, several inbound clips arrive within seconds. The single-entry model would only defend the most-recent receive against stomps; an older receive that's still on the clipboard when the channel stomps it would be lost. The 8-entry, 30-second-TTL ring buffer covers the realistic window of "what's recently mine that I might paste."
+
 ## Open items tracked for future phases
 
 - OPAQUE / SRP-style zero-knowledge password flow to remove the server-sees-password caveat. Currently on the Phase 9+ research list.
