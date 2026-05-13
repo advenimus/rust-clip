@@ -76,7 +76,7 @@
       tabs.forEach((a) => a.classList.toggle('active', a.dataset.tab === name));
       if (name === 'account') refreshAccount();
       if (name === 'history') refreshHistory();
-      if (name === 'settings') refreshSettings();
+      if (name === 'settings') { refreshSettings(); refreshLogDir(); }
       if (name === 'about') refreshAbout();
     }
 
@@ -298,6 +298,47 @@
     listen('recopy-hotkey-error', (evt) => {
       const detail = evt && evt.payload ? String(evt.payload) : 'unknown error';
       setSettingsMsg('Could not register shortcut: ' + detail, 'err');
+    });
+
+    // ---- Diagnostics ----
+    const openLogsBtn = document.getElementById('open-logs-btn');
+    const exportLogsBtn = document.getElementById('export-logs-btn');
+    const logDirPath = document.getElementById('log-dir-path');
+    const diagnosticsMsg = document.getElementById('diagnostics-msg');
+
+    function setDiagnosticsMsg(text, cls = '') {
+      diagnosticsMsg.textContent = text;
+      diagnosticsMsg.className = 'status ' + cls;
+    }
+
+    async function refreshLogDir() {
+      try {
+        logDirPath.textContent = await invoke('cmd_log_dir');
+      } catch (err) {
+        logDirPath.textContent = '(unable to resolve: ' + String(err) + ')';
+      }
+    }
+
+    openLogsBtn.addEventListener('click', async () => {
+      try {
+        await invoke('cmd_open_log_dir');
+        setDiagnosticsMsg('Opened logs folder.', 'ok');
+      } catch (err) {
+        setDiagnosticsMsg(String(err), 'err');
+      }
+    });
+    exportLogsBtn.addEventListener('click', async () => {
+      setDiagnosticsMsg('Preparing zip…', '');
+      try {
+        const path = await invoke('cmd_export_logs_zip');
+        if (path) {
+          setDiagnosticsMsg('Saved to ' + path, 'ok');
+        } else {
+          setDiagnosticsMsg('Export cancelled.', '');
+        }
+      } catch (err) {
+        setDiagnosticsMsg(String(err), 'err');
+      }
     });
 
     // ---- History panel ----
