@@ -7,7 +7,9 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use rustclip_client::clipboard::{self, ClipboardHandle, WriteFailure};
+use rustclip_client::clipboard::{
+    self, ClipboardHandle, OutgoingSkip, OutgoingSkipReason, WriteFailure,
+};
 use tauri::{AppHandle, Emitter};
 use tauri_plugin_notification::NotificationExt;
 use tokio::{sync::Mutex, task::JoinHandle};
@@ -28,6 +30,12 @@ pub struct SyncRunner {
     /// the local paste won't have what the user expects). Fires a
     /// toast and a transient tray status flicker.
     failure_consumer: Mutex<Option<JoinHandle<()>>>,
+    /// Consumes OutgoingSkip notices from the sync loop — events the
+    /// watcher detected but sync refused to send (file bundle exceeds
+    /// the size cap, unpackable pasteboard junk). Surfaces a toast so
+    /// the user understands why their copy didn't appear on the
+    /// other device.
+    skip_consumer: Mutex<Option<JoinHandle<()>>>,
     status: Mutex<SyncStatus>,
     /// Handle to the clipboard worker thread. Populated in `start()`,
     /// cleared in `stop()`. Tauri commands and the tray menu clone the
@@ -50,6 +58,7 @@ impl SyncRunner {
             handle: Mutex::new(None),
             watcher: Mutex::new(None),
             failure_consumer: Mutex::new(None),
+            skip_consumer: Mutex::new(None),
             status: Mutex::new(SyncStatus::Stopped),
             clipboard: std::sync::Mutex::new(None),
         }
@@ -102,12 +111,25 @@ impl SyncRunner {
         *fc = Some(failure_task);
         drop(fc);
 
+        // Side-car for outgoing skip notices (size-cap rejections,
+        // unpackable bundles). Same pattern as the failure consumer
+        // above but distinct semantics — these are local-side decisions
+        // the user should know about, not remote apply errors.
+        let (skip_tx, skip_rx) = tokio::sync::mpsc::channel::<OutgoingSkip>(8);
+        let skip_app = app.clone();
+        let skip_task = tokio::spawn(consume_outgoing_skips(skip_app, skip_rx));
+        let mut sc = self.skip_consumer.lock().await;
+        *sc = Some(skip_task);
+        drop(sc);
+
         let status_cell = Arc::clone(self);
         let emit_app = app.clone();
         let task = tokio::spawn(async move {
             info!("sync task starting");
             status_cell.set_status(&emit_app, SyncStatus::Running).await;
-            match rustclip_client::gui_api::run_sync(ctx, handle, event_rx).await {
+            match rustclip_client::gui_api::run_sync_with_skip_tx(ctx, handle, event_rx, skip_tx)
+                .await
+            {
                 Ok(()) => {
                     info!("sync exited cleanly");
                     status_cell.set_status(&emit_app, SyncStatus::Stopped).await;
@@ -153,6 +175,11 @@ impl SyncRunner {
             task.abort();
         }
         drop(fc);
+        let mut sc = self.skip_consumer.lock().await;
+        if let Some(task) = sc.take() {
+            task.abort();
+        }
+        drop(sc);
         if let Ok(mut slot) = self.clipboard.lock() {
             *slot = None;
         }
@@ -205,6 +232,66 @@ async fn consume_write_failures(app: AppHandle, mut rx: tokio::sync::mpsc::Recei
         }
     }
     debug!("write-failure consumer exiting (channel closed)");
+}
+
+/// Drains [`OutgoingSkip`] notices from the sync loop. Today only
+/// `OutgoingSkipReason::TooLarge` and `OutgoingSkipReason::Unpackable`
+/// fire, both for file bundles. Surfaces a tray-status flicker plus a
+/// dedicated toast so the user understands why their copy didn't
+/// appear on the other device.
+async fn consume_outgoing_skips(app: AppHandle, mut rx: tokio::sync::mpsc::Receiver<OutgoingSkip>) {
+    while let Some(skip) = rx.recv().await {
+        let kind_str = skip.kind.as_str();
+        debug!(kind = kind_str, reason = ?skip.reason, "outgoing skip surfacing");
+
+        let _ = app.emit(
+            "clip-outgoing-skipped",
+            serde_json::json!({ "kind": kind_str, "reason": skip_reason_to_json(&skip.reason) }),
+        );
+
+        let (transient, title, body) = match &skip.reason {
+            OutgoingSkipReason::TooLarge { total_bytes, cap } => {
+                let total_mb = (*total_bytes as f64) / (1024.0 * 1024.0);
+                let cap_mb = (*cap as f64) / (1024.0 * 1024.0);
+                (
+                    format!("{kind_str} bundle too large to auto-sync"),
+                    "RustClip skipped a copy".to_string(),
+                    format!(
+                        "Bundle is {total_mb:.0} MB which exceeds the {cap_mb:.0} MB auto-sync cap. \
+                        Raise the cap in Settings → Auto-sync, or use the `send-files` CLI."
+                    ),
+                )
+            }
+            OutgoingSkipReason::Unpackable { error } => (
+                format!("couldn't pack {kind_str} bundle"),
+                "RustClip skipped a copy".to_string(),
+                format!(
+                    "The clipboard reference couldn't be packed (often a stale path). \
+                    Try the copy again. Detail: {error}"
+                ),
+            ),
+        };
+
+        crate::tray::flash_transient_status(&app, transient);
+
+        if notifications_enabled() {
+            if let Err(e) = app.notification().builder().title(title).body(body).show() {
+                warn!(error = %e, "showing outgoing-skip notification failed");
+            }
+        }
+    }
+    debug!("outgoing-skip consumer exiting (channel closed)");
+}
+
+fn skip_reason_to_json(r: &OutgoingSkipReason) -> serde_json::Value {
+    match r {
+        OutgoingSkipReason::TooLarge { total_bytes, cap } => {
+            serde_json::json!({ "kind": "too_large", "total_bytes": total_bytes, "cap": cap })
+        }
+        OutgoingSkipReason::Unpackable { error } => {
+            serde_json::json!({ "kind": "unpackable", "error": error })
+        }
+    }
 }
 
 /// Reads the per-device config. Fails open (returns true) so a

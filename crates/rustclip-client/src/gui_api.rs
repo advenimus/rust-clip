@@ -196,6 +196,27 @@ pub async fn run_sync(
     .await
 }
 
+/// GUI variant of [`run_sync`] that additionally surfaces outgoing-skip
+/// notices (size-cap rejections, unpackable bundles) onto a channel so
+/// the tray app can show a notification toast.
+pub async fn run_sync_with_skip_tx(
+    ctx: SyncContext,
+    clipboard: crate::clipboard::ClipboardHandle,
+    event_rx: tokio::sync::mpsc::Receiver<crate::clipboard::ClipEvent>,
+    skip_tx: tokio::sync::mpsc::Sender<crate::clipboard::OutgoingSkip>,
+) -> Result<()> {
+    sync::run_with_skip_tx(
+        ctx.server_url,
+        ctx.device_token,
+        ctx.device_id,
+        ctx.content_key,
+        clipboard,
+        event_rx,
+        Some(skip_tx),
+    )
+    .await
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HistoryEntryView {
     pub id: String,

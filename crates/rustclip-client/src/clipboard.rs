@@ -87,6 +87,27 @@ pub struct WriteFailure {
     pub error: String,
 }
 
+/// An outgoing clipboard event was detected by the watcher but the
+/// sync loop refused to send it. Surfaced to the GUI so the user
+/// understands why a copy they just made didn't appear on the other
+/// device — historically these were silent log lines.
+#[derive(Debug, Clone)]
+pub struct OutgoingSkip {
+    pub kind: WriteKind,
+    pub reason: OutgoingSkipReason,
+}
+
+#[derive(Debug, Clone)]
+pub enum OutgoingSkipReason {
+    /// Bundle exceeded `auto_sync_max_bytes`. User can raise the cap in
+    /// Settings or send via the `send-files` CLI which is uncapped.
+    TooLarge { total_bytes: u64, cap: u64 },
+    /// Bundle could not be packed (e.g. a stale pasteboard URL pointing
+    /// at a path the user can't stat). The next genuine copy will work
+    /// — surface so the user knows the previous attempt didn't go.
+    Unpackable { error: String },
+}
+
 /// Decoded PNG image bytes plus dimensions for a round-trip write.
 #[derive(Debug, Clone)]
 pub struct ImageBytes {
@@ -629,7 +650,7 @@ fn worker_loop(
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        debug!(error = %e, "clipboard file-list read error");
+                        warn!(error = %e, "clipboard file-list read error");
                     }
                 }
             } else {

@@ -138,6 +138,18 @@ mod platform {
     /// pattern as the WS reconnect backoff in `sync.rs`).
     const OPEN_RETRY_BASE_MS: u64 = 50;
 
+    /// Total attempts at GetClipboardData(CF_HDROP). Explorer routinely
+    /// delay-renders CF_HDROP (the bytes don't exist on the clipboard
+    /// until `GetClipboardData` is called, at which point Windows sends
+    /// `WM_RENDERFORMAT` to Explorer to populate them). On synced
+    /// folders (OneDrive, SharePoint) the first call can return Err
+    /// while the render is still in flight; a brief retry usually
+    /// succeeds. Documented `WM_RENDERFORMAT` timeout is 30 s; we cap
+    /// at a few short tries so we don't hold the worker on a stuck
+    /// source.
+    const GETDATA_MAX_ATTEMPTS: u32 = 3;
+    const GETDATA_RETRY_BASE_MS: u64 = 25;
+
     struct ClipboardGuard;
     impl ClipboardGuard {
         fn open() -> Result<Self> {
@@ -235,24 +247,87 @@ mod platform {
     pub fn read_file_list() -> Result<Option<Vec<PathBuf>>> {
         unsafe {
             if IsClipboardFormatAvailable(CF_HDROP).is_err() {
+                // No files on the clipboard. This is the common case on
+                // every poll tick when the user hasn't copied a file —
+                // keep silent at debug to avoid log spam.
                 return Ok(None);
             }
         }
         let _guard = ClipboardGuard::open()?;
         unsafe {
-            let h = match GetClipboardData(CF_HDROP) {
-                Ok(h) => h,
-                Err(_) => return Ok(None),
+            // CF_HDROP is delay-rendered by Explorer when the source is
+            // OneDrive / SharePoint / a synced folder, and sometimes for
+            // any selection that touched a shell namespace extension.
+            // The first GetClipboardData call kicks WM_RENDERFORMAT to
+            // Explorer; subsequent calls in the same OpenClipboard
+            // session see the rendered bytes.
+            let mut last_err: Option<windows::core::Error> = None;
+            let mut handle: Option<HANDLE> = None;
+            for attempt in 1..=GETDATA_MAX_ATTEMPTS {
+                match GetClipboardData(CF_HDROP) {
+                    Ok(h) if !h.0.is_null() => {
+                        handle = Some(h);
+                        break;
+                    }
+                    Ok(_) => {
+                        // Documented null-return path for delay-rendered
+                        // formats whose source hasn't responded yet.
+                        debug!(
+                            attempt,
+                            max = GETDATA_MAX_ATTEMPTS,
+                            "GetClipboardData(CF_HDROP) returned null handle (delay-render pending)"
+                        );
+                    }
+                    Err(e) => {
+                        debug!(
+                            attempt,
+                            max = GETDATA_MAX_ATTEMPTS,
+                            error = %e,
+                            "GetClipboardData(CF_HDROP) failed, will retry"
+                        );
+                        last_err = Some(e);
+                    }
+                }
+                if attempt < GETDATA_MAX_ATTEMPTS {
+                    thread::sleep(retry_delay(GETDATA_RETRY_BASE_MS));
+                }
+            }
+            let h = match handle {
+                Some(h) => h,
+                None => {
+                    // IsClipboardFormatAvailable said true but we couldn't
+                    // read it. Surface this at warn so field reports show
+                    // it — historically this was a silent return.
+                    match last_err {
+                        Some(e) => warn!(
+                            attempts = GETDATA_MAX_ATTEMPTS,
+                            error = %e,
+                            "GetClipboardData(CF_HDROP) failed after retries — likely delay-rendered by source (OneDrive / shell extension)",
+                        ),
+                        None => warn!(
+                            attempts = GETDATA_MAX_ATTEMPTS,
+                            "GetClipboardData(CF_HDROP) returned null handle after retries — likely delay-rendered by source",
+                        ),
+                    }
+                    return Ok(None);
+                }
             };
             let hdrop = HDROP(h.0 as *mut _);
             let count = DragQueryFileW(hdrop, 0xFFFFFFFF, None);
             if count == 0 {
+                warn!(
+                    "DragQueryFileW reported 0 files on a non-null HDROP — clipboard contents may be malformed or partially rendered",
+                );
                 return Ok(None);
             }
             let mut out = Vec::with_capacity(count as usize);
             for i in 0..count {
                 let needed = DragQueryFileW(hdrop, i, None) as usize;
                 if needed == 0 {
+                    warn!(
+                        index = i,
+                        count, "DragQueryFileW returned 0-byte length for HDROP entry — skipping"
+                    );
                     continue;
                 }
                 let mut buf = vec![0u16; needed + 1];
@@ -262,8 +337,10 @@ mod platform {
                 out.push(PathBuf::from(os));
             }
             if out.is_empty() {
+                warn!(count, "HDROP enumeration produced no usable paths");
                 Ok(None)
             } else {
+                debug!(count = out.len(), "read file list from clipboard");
                 Ok(Some(out))
             }
         }

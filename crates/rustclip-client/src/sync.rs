@@ -28,7 +28,9 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::{
-    clipboard::{ClipEvent, ClipboardHandle, GuardSpec},
+    clipboard::{
+        ClipEvent, ClipboardHandle, GuardSpec, OutgoingSkip, OutgoingSkipReason, WriteKind,
+    },
     config::{ClientConfig, GuardMode},
     crypto::Cipher,
     files::{self, FileBundle, PackError},
@@ -69,7 +71,31 @@ pub async fn run(
     device_id: Uuid,
     content_key: Zeroizing<[u8; 32]>,
     clipboard: ClipboardHandle,
+    event_rx: mpsc::Receiver<ClipEvent>,
+) -> Result<()> {
+    run_with_skip_tx(
+        server_url,
+        device_token,
+        device_id,
+        content_key,
+        clipboard,
+        event_rx,
+        None,
+    )
+    .await
+}
+
+/// Same as [`run`] but additionally surfaces outgoing-skip notices
+/// (size-cap rejections, unpackable bundles) onto the supplied channel.
+/// The CLI uses [`run`] (no GUI to notify); the GUI uses this variant.
+pub async fn run_with_skip_tx(
+    server_url: String,
+    device_token: String,
+    device_id: Uuid,
+    content_key: Zeroizing<[u8; 32]>,
+    clipboard: ClipboardHandle,
     mut event_rx: mpsc::Receiver<ClipEvent>,
+    skip_tx: Option<mpsc::Sender<OutgoingSkip>>,
 ) -> Result<()> {
     let ws_url = http_to_ws(&server_url)?;
     // Key is cloned into XChaCha20Poly1305 which ZeroizeOnDrop's its
@@ -92,6 +118,7 @@ pub async fn run(
             &clipboard,
             &mut seen,
             &history,
+            skip_tx.as_ref(),
         )
         .await
         {
@@ -134,6 +161,7 @@ async fn session(
     clipboard: &ClipboardHandle,
     seen: &mut SeenEvents,
     history: &Arc<Mutex<History>>,
+    skip_tx: Option<&mpsc::Sender<OutgoingSkip>>,
 ) -> Result<()> {
     let mut request = ws_url
         .into_client_request()
@@ -170,7 +198,7 @@ async fn session(
                     return Ok(());
                 };
                 let Some((outgoing, preview)) =
-                    build_outgoing(cipher, rest, device_token, device_id, event).await?
+                    build_outgoing(cipher, rest, device_token, device_id, event, skip_tx).await?
                 else {
                     continue;
                 };
@@ -244,6 +272,7 @@ async fn build_outgoing(
     device_token: &str,
     device_id: Uuid,
     event: ClipEvent,
+    skip_tx: Option<&mpsc::Sender<OutgoingSkip>>,
 ) -> Result<Option<(ClipEventMessage, OutgoingPreview)>> {
     match event {
         ClipEvent::Text(text) => {
@@ -309,6 +338,12 @@ async fn build_outgoing(
                         cap,
                         "auto-sync file bundle exceeds cap; skipping (use `send-files` CLI to override)",
                     );
+                    if let Some(tx) = skip_tx {
+                        let _ = tx.try_send(OutgoingSkip {
+                            kind: WriteKind::Files,
+                            reason: OutgoingSkipReason::TooLarge { total_bytes, cap },
+                        });
+                    }
                     return Ok(None);
                 }
                 Err(PackError::Other(e)) => {
@@ -322,6 +357,14 @@ async fn build_outgoing(
                         error = %e,
                         "skipping unpackable file bundle",
                     );
+                    if let Some(tx) = skip_tx {
+                        let _ = tx.try_send(OutgoingSkip {
+                            kind: WriteKind::Files,
+                            reason: OutgoingSkipReason::Unpackable {
+                                error: e.to_string(),
+                            },
+                        });
+                    }
                     return Ok(None);
                 }
             };
