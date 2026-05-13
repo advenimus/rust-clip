@@ -241,37 +241,43 @@ pub async fn cmd_get_autostart(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
-/// Opens (or focuses) one of the known windows. The webview URL uses
-/// `#account` / `#history` / `#about` hashes so a single `index.html`
-/// renders the right panel.
+/// Opens (or focuses) the unified RustClip window on the requested tab.
+/// All UI lives in one webview labeled `main`; the `name` argument
+/// selects which tab is activated via a URL hash (`#history`,
+/// `#settings`, `#about`). Legacy names (`account`) are mapped onto
+/// `settings` so older tray IDs still work after the consolidation.
 #[tauri::command]
 pub async fn cmd_show_window(app: AppHandle, name: String) -> Result<(), String> {
     open_or_focus(&app, &name).map_err(map_err)
 }
 
 pub fn open_or_focus(app: &AppHandle, name: &str) -> anyhow::Result<()> {
-    let label = match name {
-        "account" => "account",
+    let tab = match name {
         "history" => "history",
+        "settings" | "account" => "settings",
         "about" => "about",
         other => anyhow::bail!("unknown window: {other}"),
     };
-    if let Some(win) = app.get_webview_window(label) {
+
+    if let Some(win) = app.get_webview_window("main") {
+        // Use the frontend's __rcShow helper when available so the tab
+        // switches even if the hash already matches (a plain hash set
+        // wouldn't fire hashchange in that case). Falls back to a hash
+        // assignment for the boot race where __rcShow isn't bound yet.
+        let _ = win.eval(format!(
+            "if (window.__rcShow) {{ window.__rcShow('{tab}'); }} else {{ window.location.hash = '{tab}'; }}"
+        ));
         let _ = win.show();
+        let _ = win.unminimize();
         let _ = win.set_focus();
         return Ok(());
     }
-    let url = format!("index.html#{label}");
-    let title = match label {
-        "account" => "RustClip · Account",
-        "history" => "RustClip · History",
-        "about" => "RustClip · About",
-        _ => "RustClip",
-    };
-    WebviewWindowBuilder::new(app, label, WebviewUrl::App(url.into()))
-        .title(title)
-        .inner_size(760.0, 560.0)
-        .min_inner_size(520.0, 360.0)
+
+    let url = format!("index.html#{tab}");
+    WebviewWindowBuilder::new(app, "main", WebviewUrl::App(url.into()))
+        .title("RustClip")
+        .inner_size(820.0, 600.0)
+        .min_inner_size(560.0, 420.0)
         .resizable(true)
         .visible(true)
         .build()?;
@@ -336,9 +342,14 @@ pub async fn cmd_set_client_config(
     config: ClientConfigView,
 ) -> Result<ClientConfigView, String> {
     let updated = set_client_config(config).map_err(map_err)?;
-    // Re-register the hotkey from the saved-and-normalized value so
-    // an empty string clears the registration and an invalid combo
-    // surfaces a `recopy-hotkey-error` event for the UI.
-    crate::hotkey::re_register(&app, &updated.recopy_hotkey);
+    // Re-register the hotkey from the saved-and-normalized value. When
+    // the toggle is off we pass an empty string so any prior
+    // registration is cleared while the saved combo is preserved.
+    let combo = if updated.recopy_hotkey_enabled {
+        updated.recopy_hotkey.as_str()
+    } else {
+        ""
+    };
+    crate::hotkey::re_register(&app, combo);
     Ok(updated)
 }

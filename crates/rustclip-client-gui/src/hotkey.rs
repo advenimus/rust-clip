@@ -20,7 +20,8 @@ use crate::commands::copy_history_item;
 /// the user can set one later in Settings.
 pub fn register_from_config(app: &AppHandle) {
     let shortcut = match rustclip_client::gui_api::get_client_config() {
-        Ok(cfg) => cfg.recopy_hotkey,
+        Ok(cfg) if cfg.recopy_hotkey_enabled => cfg.recopy_hotkey,
+        Ok(_) => String::new(),
         Err(e) => {
             warn!(error = %e, "reading client config failed; skipping hotkey registration");
             return;

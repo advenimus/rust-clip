@@ -1,4 +1,5 @@
-// Tauri v2 frontend shim. Uses the global injected by `withGlobalTauri`.
+// Tauri v2 frontend. Single-window UI with three tabs (History,
+// Settings, About). Account lives as the first section in Settings.
 
 (function () {
   const bootError = document.getElementById('boot-error');
@@ -36,9 +37,6 @@
     }
     const { invoke } = tauri.core;
     const { listen } = tauri.event;
-    // Tauri v2's WKWebView on macOS does not wire up native window.confirm /
-    // window.alert — calls silently return falsy. Route through the dialog
-    // plugin so destructive actions and error surfaces actually render.
     const dialog = tauri.dialog ?? (window.__TAURI__ && window.__TAURI__.dialog);
 
     async function confirmDialog(message, title = 'RustClip') {
@@ -47,7 +45,6 @@
       }
       return window.confirm(message);
     }
-
     async function alertDialog(message, title = 'RustClip') {
       if (dialog && typeof dialog.message === 'function') {
         return dialog.message(message, { title, kind: 'error' });
@@ -62,64 +59,95 @@
       showBootError('Unhandled rejection: ' + (ev.reason?.stack || ev.reason));
     });
 
-    const panelAccount = document.getElementById('panel-account');
-    const panelHistory = document.getElementById('panel-history');
-    const panelSettings = document.getElementById('panel-settings');
-    const panelAbout = document.getElementById('panel-about');
-    const tabs = document.querySelectorAll('.tabs a');
+    // ───────── Tab navigation ─────────
+    const panels = {
+      history: document.getElementById('panel-history'),
+      settings: document.getElementById('panel-settings'),
+      about: document.getElementById('panel-about'),
+    };
+    const tabs = Array.from(document.querySelectorAll('.tab'));
+    let currentAccount = null; // cached from cmd_status
 
+    function defaultTab() {
+      // Settings is the first-run target so the user can enroll; once
+      // enrolled, History is more useful.
+      return currentAccount ? 'history' : 'settings';
+    }
+    function resolveTab(name) {
+      if (name && panels[name]) return name;
+      return defaultTab();
+    }
     function showPanel(name) {
-      panelAccount.classList.toggle('hidden', name !== 'account');
-      panelHistory.classList.toggle('hidden', name !== 'history');
-      panelSettings.classList.toggle('hidden', name !== 'settings');
-      panelAbout.classList.toggle('hidden', name !== 'about');
-      tabs.forEach((a) => a.classList.toggle('active', a.dataset.tab === name));
-      if (name === 'account') refreshAccount();
-      if (name === 'history') refreshHistory();
-      if (name === 'settings') refreshSettings();
-      if (name === 'about') refreshAbout();
+      const target = resolveTab(name);
+      for (const [k, el] of Object.entries(panels)) {
+        if (!el) continue;
+        if (k === target) el.removeAttribute('hidden');
+        else el.setAttribute('hidden', '');
+      }
+      tabs.forEach((t) => t.classList.toggle('is-active', t.dataset.tab === target));
+      if (target === 'history') refreshHistory();
+      if (target === 'settings') refreshSettings();
+      if (target === 'about') refreshAbout();
     }
 
-    tabs.forEach((a) => {
-      a.addEventListener('click', (e) => {
-        e.preventDefault();
-        const name = a.dataset.tab;
+    tabs.forEach((t) => {
+      t.addEventListener('click', () => {
+        const name = t.dataset.tab;
         window.location.hash = name;
         showPanel(name);
       });
     });
-
-    function pickPanelFromHash() {
-      const h = window.location.hash.replace('#', '') || 'account';
-      showPanel(h);
+    function panelFromHash() {
+      showPanel(window.location.hash.replace('#', ''));
     }
 
-    // ---- Account panel ----
+    // ───────── Account section ─────────
+    const accountCard = document.getElementById('account-card');
+    const accountSignedIn = document.getElementById('account-signed-in');
+    const accountSignedOut = document.getElementById('account-signed-out');
+    const accountSub = document.getElementById('account-sub');
+    const accountMsg = document.getElementById('account-msg');
+    const syncPill = document.getElementById('sync-pill');
+    const brandStatus = document.getElementById('brand-status');
+    const accUser = document.getElementById('acc-user');
+    const accServer = document.getElementById('acc-server');
+    const accDevice = document.getElementById('acc-device');
+    const btnStartSync = document.getElementById('btn-start-sync');
+    const btnStopSync = document.getElementById('btn-stop-sync');
+    const btnLogout = document.getElementById('btn-logout');
     const modeEnroll = document.getElementById('mode-enroll');
     const modeLogin = document.getElementById('mode-login');
     const formEnroll = document.getElementById('form-enroll');
     const formLogin = document.getElementById('form-login');
-    const accountStatus = document.getElementById('account-status');
-    const accountMsg = document.getElementById('account-msg');
-    const authForms = document.getElementById('auth-forms');
 
     modeEnroll.addEventListener('click', () => {
+      modeEnroll.classList.add('is-active');
+      modeLogin.classList.remove('is-active');
       formEnroll.classList.remove('hidden');
       formLogin.classList.add('hidden');
     });
     modeLogin.addEventListener('click', () => {
+      modeLogin.classList.add('is-active');
+      modeEnroll.classList.remove('is-active');
       formLogin.classList.remove('hidden');
       formEnroll.classList.add('hidden');
     });
+
+    function setAccountMsg(text, cls = '') {
+      if (!text) { accountMsg.setAttribute('hidden', ''); accountMsg.textContent = ''; return; }
+      accountMsg.removeAttribute('hidden');
+      accountMsg.textContent = text;
+      accountMsg.className = 'card-msg ' + cls;
+    }
 
     formEnroll.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(formEnroll);
       if (fd.get('password') !== fd.get('confirm_password')) {
-        setMsg('Passwords do not match.', 'err');
+        setAccountMsg('Passwords do not match.', 'err');
         return;
       }
-      setMsg('Enrolling…');
+      setAccountMsg('Enrolling…');
       try {
         await invoke('cmd_enroll', {
           input: {
@@ -129,18 +157,18 @@
             device_name: fd.get('device_name') || null,
           },
         });
-        setMsg('Enrolled successfully.', 'ok');
+        setAccountMsg('Enrolled successfully.', 'ok');
         formEnroll.reset();
-        refreshAccount();
+        await refreshAccount();
       } catch (err) {
-        setMsg(String(err), 'err');
+        setAccountMsg(String(err), 'err');
       }
     });
 
     formLogin.addEventListener('submit', async (e) => {
       e.preventDefault();
       const fd = new FormData(formLogin);
-      setMsg('Logging in…');
+      setAccountMsg('Logging in…');
       try {
         await invoke('cmd_login', {
           input: {
@@ -150,61 +178,85 @@
             device_name: fd.get('device_name') || null,
           },
         });
-        setMsg('Logged in.', 'ok');
+        setAccountMsg('Logged in.', 'ok');
         formLogin.reset();
-        refreshAccount();
+        await refreshAccount();
       } catch (err) {
-        setMsg(String(err), 'err');
+        setAccountMsg(String(err), 'err');
       }
     });
+
+    btnLogout.addEventListener('click', async () => {
+      if (!(await confirmDialog('Log out of this device? This will sign out and clear local keys.'))) return;
+      try {
+        await invoke('cmd_logout');
+        setAccountMsg('Logged out.', 'ok');
+        await refreshAccount();
+      } catch (err) {
+        setAccountMsg(String(err), 'err');
+      }
+    });
+    btnStartSync.addEventListener('click', async () => {
+      try { await invoke('cmd_start_sync'); setAccountMsg('Sync started.', 'ok'); await refreshSyncState(); }
+      catch (err) { setAccountMsg(String(err), 'err'); }
+    });
+    btnStopSync.addEventListener('click', async () => {
+      try { await invoke('cmd_stop_sync'); setAccountMsg('Sync stopped.', 'ok'); await refreshSyncState(); }
+      catch (err) { setAccountMsg(String(err), 'err'); }
+    });
+
+    function renderAccountCard(acc) {
+      if (acc) {
+        accountSignedIn.removeAttribute('hidden');
+        accountSignedOut.setAttribute('hidden', '');
+        accountSub.textContent = `Signed in as ${acc.username}.`;
+        accUser.textContent = acc.username;
+        accServer.textContent = acc.server_url;
+        accDevice.textContent = acc.device_id;
+      } else {
+        accountSignedIn.setAttribute('hidden', '');
+        accountSignedOut.removeAttribute('hidden');
+        accountSub.textContent = 'Sign in or enroll a new device to start syncing.';
+      }
+    }
+
+    function setSyncBadge(state) {
+      // state: 'connected' | 'offline' | 'error' | 'none'
+      const map = {
+        connected: { text: 'Connected', cls: 'pill pill-ok',   brand: 'connected', brandText: 'Connected' },
+        offline:   { text: 'Offline',   cls: 'pill pill-warn', brand: 'offline',   brandText: 'Offline' },
+        error:     { text: 'Error',     cls: 'pill pill-err',  brand: 'error',     brandText: 'Error' },
+        none:      { text: 'Not connected', cls: 'pill pill-muted', brand: 'idle', brandText: 'Not enrolled' },
+      };
+      const m = map[state] || map.none;
+      syncPill.textContent = m.text;
+      syncPill.className = m.cls;
+      brandStatus.dataset.state = m.brand;
+      brandStatus.textContent = m.brandText;
+    }
+
+    async function refreshSyncState() {
+      try {
+        if (!currentAccount) { setSyncBadge('none'); return; }
+        const running = await invoke('cmd_sync_running');
+        setSyncBadge(running ? 'connected' : 'offline');
+      } catch {
+        setSyncBadge('error');
+      }
+    }
 
     async function refreshAccount() {
       try {
         const acc = await invoke('cmd_status');
-        if (acc) {
-          authForms.classList.add('hidden');
-          accountStatus.innerHTML = `
-            <div class="account-card">
-              <h3>Signed in as ${escapeHtml(acc.username)}</h3>
-              <dl>
-                <dt>Server</dt><dd>${escapeHtml(acc.server_url)}</dd>
-                <dt>User ID</dt><dd>${escapeHtml(acc.user_id)}</dd>
-                <dt>Device ID</dt><dd>${escapeHtml(acc.device_id)}</dd>
-              </dl>
-              <div class="account-actions">
-                <button class="btn btn-ghost" id="start-sync-btn">Start sync</button>
-                <button class="btn btn-ghost" id="stop-sync-btn">Stop sync</button>
-                <button class="btn btn-danger" id="logout-btn">Log out</button>
-              </div>
-            </div>`;
-          document.getElementById('logout-btn').addEventListener('click', async () => {
-            if (!(await confirmDialog('Log out of this device? This will sign out and clear local keys.'))) return;
-            try { await invoke('cmd_logout'); setMsg('Logged out.', 'ok'); refreshAccount(); }
-            catch (err) { setMsg(String(err), 'err'); }
-          });
-          document.getElementById('start-sync-btn').addEventListener('click', async () => {
-            try { await invoke('cmd_start_sync'); setMsg('Sync started.', 'ok'); }
-            catch (err) { setMsg(String(err), 'err'); }
-          });
-          document.getElementById('stop-sync-btn').addEventListener('click', async () => {
-            try { await invoke('cmd_stop_sync'); setMsg('Sync stopped.', 'ok'); }
-            catch (err) { setMsg(String(err), 'err'); }
-          });
-        } else {
-          authForms.classList.remove('hidden');
-          accountStatus.innerHTML = '';
-        }
+        currentAccount = acc || null;
+        renderAccountCard(currentAccount);
+        await refreshSyncState();
       } catch (err) {
-        setMsg(String(err), 'err');
+        setAccountMsg(String(err), 'err');
       }
     }
 
-    function setMsg(text, cls = '') {
-      accountMsg.textContent = text;
-      accountMsg.className = 'status ' + cls;
-    }
-
-    // ---- Settings panel ----
+    // ───────── Settings panel ─────────
     const autostartToggle = document.getElementById('autostart-toggle');
     const autoSyncFilesToggle = document.getElementById('auto-sync-files-toggle');
     const autoSyncMaxMb = document.getElementById('auto-sync-max-mb');
@@ -213,14 +265,28 @@
     const clipboardGuardToggle = document.getElementById('clipboard-guard-toggle');
     const clipboardGuardSeconds = document.getElementById('clipboard-guard-seconds');
     const clipboardGuardSave = document.getElementById('clipboard-guard-save');
+    const recopyHotkeyToggle = document.getElementById('recopy-hotkey-toggle');
     const recopyHotkey = document.getElementById('recopy-hotkey');
     const recopyHotkeySave = document.getElementById('recopy-hotkey-save');
     const settingsMsg = document.getElementById('settings-msg');
 
     function setSettingsMsg(text, cls = '') {
+      if (!text) { settingsMsg.setAttribute('hidden', ''); settingsMsg.textContent = ''; return; }
+      settingsMsg.removeAttribute('hidden');
       settingsMsg.textContent = text;
-      settingsMsg.className = 'status ' + cls;
+      settingsMsg.className = 'page-msg ' + cls;
     }
+
+    function bindSubRow(toggleEl) {
+      const row = document.querySelector(`.sub-row[data-bound-to="${toggleEl.id}"]`);
+      if (!row) return;
+      const apply = () => row.classList.toggle('is-disabled', !toggleEl.checked);
+      apply();
+      toggleEl.addEventListener('change', apply);
+    }
+
+    // Wire dependent rows once.
+    [autoSyncFilesToggle, clipboardGuardToggle, recopyHotkeyToggle].forEach(bindSubRow);
 
     async function refreshSettings() {
       try { autostartToggle.checked = await invoke('cmd_get_autostart'); } catch {}
@@ -231,7 +297,12 @@
         notificationsToggle.checked = !!cfg.notifications_enabled;
         clipboardGuardToggle.checked = !!cfg.clipboard_guard_enabled;
         clipboardGuardSeconds.value = clampGuardSeconds(cfg.clipboard_guard_seconds);
+        recopyHotkeyToggle.checked = !!cfg.recopy_hotkey_enabled;
         recopyHotkey.value = cfg.recopy_hotkey || '';
+        // Re-evaluate dependent rows after values are loaded.
+        [autoSyncFilesToggle, clipboardGuardToggle, recopyHotkeyToggle].forEach((t) =>
+          document.querySelector(`.sub-row[data-bound-to="${t.id}"]`)
+            ?.classList.toggle('is-disabled', !t.checked));
       } catch (err) {
         setSettingsMsg(String(err), 'err');
       }
@@ -255,12 +326,14 @@
             notifications_enabled: notificationsToggle.checked,
             clipboard_guard_enabled: clipboardGuardToggle.checked,
             clipboard_guard_seconds: guardSeconds,
+            recopy_hotkey_enabled: recopyHotkeyToggle.checked,
             recopy_hotkey: recopyHotkey.value.trim(),
           },
         });
         autoSyncMaxMb.value = Math.max(1, Math.round(updated.auto_sync_max_bytes / (1024 * 1024)));
         clipboardGuardSeconds.value = clampGuardSeconds(updated.clipboard_guard_seconds);
         recopyHotkey.value = updated.recopy_hotkey || '';
+        recopyHotkeyToggle.checked = !!updated.recopy_hotkey_enabled;
         setSettingsMsg(okMessage || 'Saved.', 'ok');
       } catch (err) {
         setSettingsMsg(String(err), 'err');
@@ -287,20 +360,18 @@
     clipboardGuardSeconds.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
     });
+    recopyHotkeyToggle.addEventListener('change', () => saveClientConfig());
     recopyHotkeySave.addEventListener('click', () => saveClientConfig());
     recopyHotkey.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
     });
 
-    // Surface registration failures from the backend (invalid combo,
-    // already-claimed combo, etc.). The save itself still goes through —
-    // the user just needs to pick a different combo.
     listen('recopy-hotkey-error', (evt) => {
       const detail = evt && evt.payload ? String(evt.payload) : 'unknown error';
       setSettingsMsg('Could not register shortcut: ' + detail, 'err');
     });
 
-    // ---- History panel ----
+    // ───────── History panel ─────────
     const historyList = document.getElementById('history-list');
     document.getElementById('refresh-history').addEventListener('click', refreshHistory);
     document.getElementById('clear-history').addEventListener('click', async () => {
@@ -313,34 +384,49 @@
       try {
         const items = await invoke('cmd_list_history', { limit: 100 });
         if (items.length === 0) {
-          historyList.innerHTML = '<div class="history-empty">No history yet. Copy something on any enrolled device.</div>';
+          historyList.innerHTML = `
+            <div class="history-empty">
+              <div class="empty-title">No clips yet</div>
+              <div class="empty-sub">Copy something on any enrolled device and it will show up here. Items are stored locally only and encrypted at rest.</div>
+            </div>`;
           return;
         }
-        historyList.innerHTML = items
-          .map((it) => {
-            const when = new Date(it.created_at).toLocaleString();
-            return `
-              <div class="history-row">
-                <span class="dir">${escapeHtml(it.direction)}</span>
-                <span class="kind">${escapeHtml(it.kind)}</span>
-                <span class="preview" title="${escapeHtml(it.preview)}">${escapeHtml(it.preview)}</span>
-                <span class="size">${formatBytes(it.size_bytes)}</span>
-                <span class="when">${escapeHtml(when)}</span>
-                <button class="btn btn-ghost row-copy" data-id="${it.id}" data-kind="${it.kind}">Copy</button>
-              </div>`;
-          })
-          .join('');
+        historyList.innerHTML = items.map((it) => {
+          const when = new Date(it.created_at).toLocaleString();
+          const dirCls = it.direction === 'incoming' ? 'dir incoming' : 'dir';
+          return `
+            <div class="history-row" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind)}">
+              <span class="${dirCls}">${escapeHtml(it.direction)}</span>
+              <span class="kind">${escapeHtml(it.kind)}</span>
+              <span class="preview" title="${escapeHtml(it.preview)}">${escapeHtml(it.preview)}</span>
+              <span class="size">${formatBytes(it.size_bytes)}</span>
+              <span class="when">${escapeHtml(when)}</span>
+              <button class="btn btn-ghost row-copy">Copy</button>
+            </div>`;
+        }).join('');
         historyList.querySelectorAll('.row-copy').forEach((btn) => {
-          btn.addEventListener('click', async () => {
+          btn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            const row = btn.closest('.history-row');
             try {
-              await invoke('cmd_copy_history_item', { entryId: btn.dataset.id });
+              await invoke('cmd_copy_history_item', { entryId: row.dataset.id });
+            } catch (err) {
+              await alertDialog(String(err));
+            }
+          });
+        });
+        // Whole-row click as a shortcut for Copy.
+        historyList.querySelectorAll('.history-row').forEach((row) => {
+          row.addEventListener('click', async () => {
+            try {
+              await invoke('cmd_copy_history_item', { entryId: row.dataset.id });
             } catch (err) {
               await alertDialog(String(err));
             }
           });
         });
       } catch (err) {
-        historyList.innerHTML = `<div class="history-empty">${escapeHtml(String(err))}</div>`;
+        historyList.innerHTML = `<div class="history-empty"><div class="empty-sub">${escapeHtml(String(err))}</div></div>`;
       }
     }
 
@@ -349,22 +435,19 @@
       if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
       return (n / (1024 * 1024)).toFixed(1) + ' MB';
     }
-
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, (c) => ({
         '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;',
       })[c]);
     }
 
-    // ---- About panel ----
+    // ───────── About panel ─────────
     let aboutCache = null;
-
     async function refreshAbout() {
       if (!aboutCache) {
-        try {
-          aboutCache = await invoke('cmd_about');
-        } catch (err) {
-          panelAbout.innerHTML = `<div class="history-empty">${escapeHtml(String(err))}</div>`;
+        try { aboutCache = await invoke('cmd_about'); }
+        catch (err) {
+          panels.about.innerHTML = `<div class="history-empty"><div class="empty-sub">${escapeHtml(String(err))}</div></div>`;
           return;
         }
       }
@@ -378,10 +461,7 @@
       handleEl.textContent = '@' + aboutCache.author_handle;
       handleEl.href = aboutCache.author_url;
     }
-
-    // Any element with a data-ext attribute opens an external URL via the
-    // opener plugin (Tauri's webview won't navigate to remote origins).
-    panelAbout.addEventListener('click', async (e) => {
+    panels.about.addEventListener('click', async (e) => {
       const trigger = e.target.closest('[data-ext]');
       if (!trigger) return;
       e.preventDefault();
@@ -398,29 +478,24 @@
       catch (err) { await alertDialog(String(err)); }
     });
 
-    // ---- Backend events ----
-    listen('sync-status', (evt) => {
-      console.log('sync-status', evt.payload);
-    });
+    // ───────── Backend events ─────────
+    listen('sync-status', () => { refreshSyncState(); });
     listen('history-updated', () => {
-      if (!panelHistory.classList.contains('hidden')) refreshHistory();
+      if (!panels.history.hasAttribute('hidden')) refreshHistory();
     });
 
-    // ---- Update banner ----
+    // ───────── Update banner ─────────
     const updateBanner = document.getElementById('update-banner');
     const updateVersions = document.getElementById('update-banner-versions');
     const updateActions = document.getElementById('update-banner-actions');
     const updateMsg = document.getElementById('update-banner-msg');
     const updateInstallBtn = document.getElementById('update-install-btn');
     const updateLaterBtn = document.getElementById('update-later-btn');
-    let currentUpdate = null;
 
     function showUpdateBanner(info) {
-      currentUpdate = info;
       updateVersions.textContent = `v${info.current_version} → ${info.latest_version}`;
       updateMsg.textContent = '';
       updateMsg.className = 'status';
-      // Rebuild the action row based on install kind.
       updateActions.innerHTML = '';
       const selfUpdatable = ['dmg', 'msi', 'nsis', 'app_image'].includes(info.install_kind);
       if (selfUpdatable) {
@@ -457,30 +532,24 @@
 
       updateBanner.classList.remove('hidden');
     }
-
     async function installUpdateHandler() {
       updateMsg.textContent = 'Downloading update…';
       updateMsg.className = 'status';
       try {
         await invoke('cmd_install_update');
-        // Backend restarts the process on success; if we're still here the
-        // user likely cancelled the system prompt.
       } catch (err) {
         updateMsg.textContent = String(err);
         updateMsg.className = 'status err';
       }
     }
-
     updateInstallBtn && updateInstallBtn.addEventListener('click', installUpdateHandler);
     updateLaterBtn && updateLaterBtn.addEventListener('click', () => {
       updateBanner.classList.add('hidden');
     });
-
     listen('update-available', (evt) => {
       if (evt.payload) showUpdateBanner(evt.payload);
     });
 
-    // Manual "Check for updates" button on the About panel.
     const aboutCheckBtn = document.getElementById('about-check-update');
     const aboutUpdateMsg = document.getElementById('about-update-msg');
     aboutCheckBtn && aboutCheckBtn.addEventListener('click', async () => {
@@ -498,8 +567,23 @@
       }
     });
 
-    pickPanelFromHash();
-    window.addEventListener('hashchange', pickPanelFromHash);
+    // Expose to the Rust side so the tray can bring the window to the
+    // right tab even when the hash already matches (which wouldn't fire
+    // hashchange on its own).
+    window.__rcShow = (name) => {
+      const target = resolveTab(name);
+      if (window.location.hash !== '#' + target) {
+        window.location.hash = target;
+      } else {
+        showPanel(target);
+      }
+    };
+
+    // ───────── Boot ─────────
+    setSyncBadge('none');
+    await refreshAccount();
+    panelFromHash();
+    window.addEventListener('hashchange', panelFromHash);
   }
 
   if (document.readyState === 'loading') {

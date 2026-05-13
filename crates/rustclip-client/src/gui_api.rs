@@ -331,6 +331,7 @@ pub struct ClientConfigView {
     pub notifications_enabled: bool,
     pub clipboard_guard_enabled: bool,
     pub clipboard_guard_seconds: u32,
+    pub recopy_hotkey_enabled: bool,
     pub recopy_hotkey: String,
 }
 
@@ -342,6 +343,7 @@ impl From<ClientConfig> for ClientConfigView {
             notifications_enabled: c.notifications_enabled,
             clipboard_guard_enabled: c.clipboard_guard_enabled,
             clipboard_guard_seconds: c.clipboard_guard_seconds,
+            recopy_hotkey_enabled: c.recopy_hotkey_enabled,
             recopy_hotkey: c.recopy_hotkey,
         }
     }
@@ -355,6 +357,7 @@ impl From<ClientConfigView> for ClientConfig {
             notifications_enabled: v.notifications_enabled,
             clipboard_guard_enabled: v.clipboard_guard_enabled,
             clipboard_guard_seconds: v.clipboard_guard_seconds,
+            recopy_hotkey_enabled: v.recopy_hotkey_enabled,
             recopy_hotkey: v.recopy_hotkey,
         }
     }

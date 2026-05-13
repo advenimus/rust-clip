@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="color-scheme" content="light dark" />
   <title>RustClip</title>
-  <link rel="stylesheet" href="app.css?v=2" />
+  <link rel="stylesheet" href="app.css?v=3" />
 </head>
 <body>
   <header class="topbar">
@@ -15,12 +15,12 @@
         <img class="brand-mark" src="logo.png" alt="" />
       </picture>
       <span class="brand-name">RustClip</span>
+      <span id="brand-status" class="brand-status" data-state="loading">Loading…</span>
     </span>
-    <nav class="tabs">
-      <a href="#account" data-tab="account">Account</a>
-      <a href="#history" data-tab="history">History</a>
-      <a href="#settings" data-tab="settings">Settings</a>
-      <a href="#about" data-tab="about">About</a>
+    <nav class="tabs" role="tablist">
+      <button class="tab" type="button" data-tab="history" role="tab">History</button>
+      <button class="tab" type="button" data-tab="settings" role="tab">Settings</button>
+      <button class="tab" type="button" data-tab="about" role="tab">About</button>
     </nav>
   </header>
 
@@ -39,96 +39,239 @@
   </div>
 
   <main id="main">
-    <section id="panel-account" class="panel">
-      <div id="account-status"></div>
-      <div id="auth-forms">
-        <div class="toggle">
-          <button id="mode-enroll" class="btn btn-ghost">Enroll new device</button>
-          <button id="mode-login" class="btn btn-ghost">Login (existing user)</button>
-        </div>
-        <form id="form-enroll" class="auth-form">
-          <label>Server URL<input type="text" name="server_url" placeholder="https://clip.example.com" required></label>
-          <label>Enrollment token<input type="text" name="enrollment_token" required></label>
-          <label>Device name<input type="text" name="device_name" placeholder="(defaults to hostname)"></label>
-          <label>Password<input type="password" name="password" required minlength="8"></label>
-          <label>Confirm password<input type="password" name="confirm_password" required minlength="8"></label>
-          <button type="submit" class="btn btn-primary">Enroll device</button>
-        </form>
-        <form id="form-login" class="auth-form hidden">
-          <label>Server URL<input type="text" name="server_url" placeholder="https://clip.example.com" required></label>
-          <label>Username<input type="text" name="username" required></label>
-          <label>Device name<input type="text" name="device_name" placeholder="(defaults to hostname)"></label>
-          <label>Password<input type="password" name="password" required></label>
-          <button type="submit" class="btn btn-primary">Log in</button>
-        </form>
-      </div>
-      <div id="account-msg" class="status"></div>
-    </section>
-
-    <section id="panel-settings" class="panel hidden">
-      <div class="settings-group">
-        <h3>Startup</h3>
-        <label class="checkbox">
-          <input type="checkbox" id="autostart-toggle"> Start RustClip on login
-        </label>
-      </div>
-      <div class="settings-group">
-        <h3>Auto-sync files</h3>
-        <label class="checkbox">
-          <input type="checkbox" id="auto-sync-files-toggle"> Auto-sync files copied from Finder / Explorer
-        </label>
-        <label class="inline-number">
-          Max auto-sync bundle size:
-          <input type="number" id="auto-sync-max-mb" min="1" max="10240" step="1">
-          MB
-          <button id="auto-sync-max-save" class="btn btn-ghost">Save</button>
-        </label>
-        <p class="muted-note">Copies larger than this are skipped. Use the <code>send-files</code> CLI to send anything over the cap on demand.</p>
-      </div>
-      <div class="settings-group">
-        <h3>Notifications</h3>
-        <label class="checkbox">
-          <input type="checkbox" id="notifications-toggle"> Show a notification when a new clipboard item arrives
-        </label>
-        <p class="muted-note">Clipboard history always updates in the background. This toggle only controls the OS toast.</p>
-      </div>
-      <div class="settings-group">
-        <h3>Clipboard guard</h3>
-        <label class="checkbox">
-          <input type="checkbox" id="clipboard-guard-toggle"> Re-assert clipboard if cleared after sync
-        </label>
-        <label class="inline-number">
-          Re-assert window:
-          <input type="number" id="clipboard-guard-seconds" min="1" max="30" step="1">
-          seconds
-          <button id="clipboard-guard-save" class="btn btn-ghost">Save</button>
-        </label>
-        <p class="muted-note">For VDI / nested remote-desktop scenarios where the clipboard sometimes goes blank after RustClip writes to it. RustClip will only re-write if the clipboard is empty, so this never fights a real copy. Capped at 3 re-assertions per clip.</p>
-      </div>
-      <div class="settings-group">
-        <h3>Re-copy last clip shortcut</h3>
-        <label class="inline-number">
-          Global shortcut:
-          <input type="text" id="recopy-hotkey" placeholder="e.g. CmdOrCtrl+Shift+R" autocomplete="off" spellcheck="false">
-          <button id="recopy-hotkey-save" class="btn btn-ghost">Save</button>
-        </label>
-        <p class="muted-note">Press this anywhere on your system to re-copy the most recent received clip onto the OS clipboard. Useful when paste fails (e.g. a remote desktop cleared the clipboard). Leave blank to disable.</p>
-      </div>
-      <div id="settings-msg" class="status"></div>
-    </section>
-
-    <section id="panel-history" class="panel hidden">
+    <!-- ───────── History ───────── -->
+    <section id="panel-history" class="panel-host" data-panel="history" hidden>
       <div class="panel-head">
-        <h2>Clipboard history</h2>
         <div>
+          <h1 class="panel-title">Clipboard history</h1>
+          <p class="panel-sub">Click any row to copy it back to your clipboard.</p>
+        </div>
+        <div class="panel-actions">
           <button id="refresh-history" class="btn btn-ghost">Refresh</button>
           <button id="clear-history" class="btn btn-danger">Clear all</button>
         </div>
       </div>
-      <div id="history-list"></div>
+      <div class="card card-list" id="history-card">
+        <div id="history-list"></div>
+      </div>
     </section>
 
-    <section id="panel-about" class="hidden">
+    <!-- ───────── Settings ───────── -->
+    <section id="panel-settings" class="panel-host" data-panel="settings" hidden>
+      <div class="panel-head">
+        <div>
+          <h1 class="panel-title">Settings</h1>
+          <p class="panel-sub">Account, sync behavior, and preferences for this device.</p>
+        </div>
+      </div>
+
+      <section class="card" id="account-card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">Account</h2>
+            <p class="card-sub" id="account-sub">Sign in or enroll a new device to start syncing.</p>
+          </div>
+          <span id="sync-pill" class="pill pill-muted">Not connected</span>
+        </header>
+
+        <div class="card-body" id="account-signed-in" hidden>
+          <dl class="kv">
+            <dt>User</dt><dd id="acc-user" class="mono"></dd>
+            <dt>Server</dt><dd id="acc-server" class="mono"></dd>
+            <dt>Device ID</dt><dd id="acc-device" class="mono"></dd>
+          </dl>
+          <div class="row-actions">
+            <button id="btn-start-sync" class="btn btn-primary">Start sync</button>
+            <button id="btn-stop-sync" class="btn btn-ghost">Stop sync</button>
+            <button id="btn-logout" class="btn btn-danger">Log out</button>
+          </div>
+        </div>
+
+        <div class="card-body" id="account-signed-out">
+          <div class="seg" role="tablist">
+            <button id="mode-enroll" type="button" class="seg-btn is-active" role="tab">Enroll new device</button>
+            <button id="mode-login" type="button" class="seg-btn" role="tab">Log in (existing user)</button>
+          </div>
+
+          <form id="form-enroll" class="form-grid">
+            <label class="field">
+              <span>Server URL</span>
+              <input type="text" name="server_url" placeholder="https://clip.example.com" required>
+            </label>
+            <label class="field">
+              <span>Enrollment token</span>
+              <input type="text" name="enrollment_token" required>
+            </label>
+            <label class="field">
+              <span>Device name</span>
+              <input type="text" name="device_name" placeholder="(defaults to hostname)">
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input type="password" name="password" required minlength="8">
+            </label>
+            <label class="field">
+              <span>Confirm password</span>
+              <input type="password" name="confirm_password" required minlength="8">
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Enroll device</button>
+            </div>
+          </form>
+
+          <form id="form-login" class="form-grid hidden">
+            <label class="field">
+              <span>Server URL</span>
+              <input type="text" name="server_url" placeholder="https://clip.example.com" required>
+            </label>
+            <label class="field">
+              <span>Username</span>
+              <input type="text" name="username" required>
+            </label>
+            <label class="field">
+              <span>Device name</span>
+              <input type="text" name="device_name" placeholder="(defaults to hostname)">
+            </label>
+            <label class="field">
+              <span>Password</span>
+              <input type="password" name="password" required>
+            </label>
+            <div class="form-actions">
+              <button type="submit" class="btn btn-primary">Log in</button>
+            </div>
+          </form>
+        </div>
+
+        <p id="account-msg" class="card-msg" hidden></p>
+      </section>
+
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">Startup &amp; sync</h2>
+            <p class="card-sub">When RustClip launches and how it stays running.</p>
+          </div>
+        </header>
+        <div class="card-body">
+          <label class="switch" for="autostart-toggle">
+            <input type="checkbox" id="autostart-toggle">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span class="switch-text">
+              <strong>Start RustClip on login</strong>
+              <small>Launch the tray app automatically when you sign in to this computer.</small>
+            </span>
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">Notifications</h2>
+            <p class="card-sub">Optional OS toast when a new clip arrives from another device.</p>
+          </div>
+        </header>
+        <div class="card-body">
+          <label class="switch" for="notifications-toggle">
+            <input type="checkbox" id="notifications-toggle">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span class="switch-text">
+              <strong>Show notifications for new clipboard items</strong>
+              <small>History always updates in the background; this only controls the toast.</small>
+            </span>
+          </label>
+        </div>
+      </section>
+
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">Auto-sync files</h2>
+            <p class="card-sub">Sync files copied from Finder / Explorer automatically.</p>
+          </div>
+        </header>
+        <div class="card-body">
+          <label class="switch" for="auto-sync-files-toggle">
+            <input type="checkbox" id="auto-sync-files-toggle">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span class="switch-text">
+              <strong>Auto-sync files copied from the file manager</strong>
+              <small>When off, use the <code>send-files</code> CLI to send files manually. Restart sync to apply changes.</small>
+            </span>
+          </label>
+          <div class="sub-row" data-bound-to="auto-sync-files-toggle">
+            <label class="inline-field">
+              <span>Maximum bundle size</span>
+              <span class="num-suffix">
+                <input type="number" id="auto-sync-max-mb" min="1" max="10240" step="1"> MB
+              </span>
+            </label>
+            <button id="auto-sync-max-save" class="btn btn-ghost">Save</button>
+            <p class="hint">Copies above the cap are skipped automatically.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">Global re-copy shortcut</h2>
+            <p class="card-sub">Re-copy the most recent received clip from any app.</p>
+          </div>
+        </header>
+        <div class="card-body">
+          <label class="switch" for="recopy-hotkey-toggle">
+            <input type="checkbox" id="recopy-hotkey-toggle">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span class="switch-text">
+              <strong>Enable the global re-copy shortcut</strong>
+              <small>Useful when paste fails (e.g. a remote desktop cleared the clipboard).</small>
+            </span>
+          </label>
+          <div class="sub-row" data-bound-to="recopy-hotkey-toggle">
+            <label class="inline-field">
+              <span>Shortcut</span>
+              <input type="text" id="recopy-hotkey" placeholder="e.g. CmdOrCtrl+Shift+R" autocomplete="off" spellcheck="false">
+            </label>
+            <button id="recopy-hotkey-save" class="btn btn-ghost">Save</button>
+            <p class="hint">Use accelerator format: <code>CmdOrCtrl+Shift+R</code>, <code>Alt+Space</code>, etc.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">Clipboard guard <span class="tag">VDI</span></h2>
+            <p class="card-sub">Re-assert the clipboard if it gets cleared right after sync writes to it.</p>
+          </div>
+        </header>
+        <div class="card-body">
+          <label class="switch" for="clipboard-guard-toggle">
+            <input type="checkbox" id="clipboard-guard-toggle">
+            <span class="switch-track"><span class="switch-thumb"></span></span>
+            <span class="switch-text">
+              <strong>Re-assert clipboard if cleared after sync</strong>
+              <small>Only re-writes when the clipboard is empty, so it never fights a real copy. Capped at 3 retries per clip.</small>
+            </span>
+          </label>
+          <div class="sub-row" data-bound-to="clipboard-guard-toggle">
+            <label class="inline-field">
+              <span>Re-assert window</span>
+              <span class="num-suffix">
+                <input type="number" id="clipboard-guard-seconds" min="1" max="30" step="1"> seconds
+              </span>
+            </label>
+            <button id="clipboard-guard-save" class="btn btn-ghost">Save</button>
+          </div>
+        </div>
+      </section>
+
+      <p id="settings-msg" class="page-msg" hidden></p>
+    </section>
+
+    <!-- ───────── About ───────── -->
+    <section id="panel-about" class="panel-host" data-panel="about" hidden>
       <div class="about-hero">
         <picture>
           <source srcset="logo-light.png" media="(prefers-color-scheme: light)" />
@@ -150,9 +293,9 @@
         </div>
       </div>
 
-      <div class="panel about-panel">
-        <div class="panel-head"><h2>Project</h2></div>
-        <dl class="about-kv">
+      <div class="card">
+        <header class="card-head"><h2 class="card-title">Project</h2></header>
+        <dl class="kv kv-wide">
           <dt>Version</dt><dd id="about-version" class="mono">—</dd>
           <dt>Repository</dt><dd><a class="mono ext-link" data-ext="repo" id="about-repo" href="#">—</a></dd>
           <dt>License</dt><dd id="about-license">—</dd>
@@ -163,9 +306,9 @@
         </div>
       </div>
 
-      <div class="panel about-panel">
-        <div class="panel-head"><h2>Credits</h2></div>
-        <dl class="about-kv">
+      <div class="card">
+        <header class="card-head"><h2 class="card-title">Credits</h2></header>
+        <dl class="kv kv-wide">
           <dt>Designed &amp; built by</dt>
           <dd>
             <span id="about-author">—</span>
@@ -179,6 +322,6 @@
     </section>
   </main>
 
-  <script src="app.js"></script>
+  <script src="app.js?v=3"></script>
 </body>
 </html>

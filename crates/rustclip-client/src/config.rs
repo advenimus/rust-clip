@@ -53,9 +53,14 @@ pub struct ClientConfig {
     /// can't disable the cap.
     #[serde(default = "default_clipboard_guard_seconds")]
     pub clipboard_guard_seconds: u32,
+    /// Whether the global re-copy shortcut should be registered at
+    /// startup. Lets the user temporarily turn the shortcut off without
+    /// losing their saved key combination.
+    #[serde(default = "default_recopy_hotkey_enabled")]
+    pub recopy_hotkey_enabled: bool,
     /// Global shortcut string (tauri-plugin-global-shortcut accelerator
     /// format) that re-copies the most recent history item to the OS
-    /// clipboard. Empty string disables the shortcut.
+    /// clipboard. Persists even when `recopy_hotkey_enabled` is false.
     #[serde(default = "default_recopy_hotkey")]
     pub recopy_hotkey: String,
 }
@@ -75,6 +80,9 @@ fn default_clipboard_guard_enabled() -> bool {
 fn default_clipboard_guard_seconds() -> u32 {
     5
 }
+fn default_recopy_hotkey_enabled() -> bool {
+    true
+}
 fn default_recopy_hotkey() -> String {
     DEFAULT_RECOPY_HOTKEY.to_string()
 }
@@ -87,6 +95,7 @@ impl Default for ClientConfig {
             notifications_enabled: default_notifications_enabled(),
             clipboard_guard_enabled: default_clipboard_guard_enabled(),
             clipboard_guard_seconds: default_clipboard_guard_seconds(),
+            recopy_hotkey_enabled: default_recopy_hotkey_enabled(),
             recopy_hotkey: default_recopy_hotkey(),
         }
     }
@@ -155,6 +164,7 @@ mod tests {
         assert!(cfg.notifications_enabled);
         assert!(!cfg.clipboard_guard_enabled);
         assert_eq!(cfg.clipboard_guard_seconds, 5);
+        assert!(cfg.recopy_hotkey_enabled);
         assert_eq!(cfg.recopy_hotkey, DEFAULT_RECOPY_HOTKEY);
     }
 
@@ -168,6 +178,7 @@ mod tests {
             notifications_enabled: false,
             clipboard_guard_enabled: true,
             clipboard_guard_seconds: 10,
+            recopy_hotkey_enabled: false,
             recopy_hotkey: "Ctrl+Shift+P".into(),
         };
         cfg.save_to(&path).unwrap();
@@ -177,6 +188,7 @@ mod tests {
         assert!(!loaded.notifications_enabled);
         assert!(loaded.clipboard_guard_enabled);
         assert_eq!(loaded.clipboard_guard_seconds, 10);
+        assert!(!loaded.recopy_hotkey_enabled);
         assert_eq!(loaded.recopy_hotkey, "Ctrl+Shift+P");
     }
 
@@ -191,6 +203,7 @@ mod tests {
         assert!(loaded.notifications_enabled);
         assert!(!loaded.clipboard_guard_enabled);
         assert_eq!(loaded.clipboard_guard_seconds, 5);
+        assert!(loaded.recopy_hotkey_enabled);
         assert_eq!(loaded.recopy_hotkey, DEFAULT_RECOPY_HOTKEY);
     }
 
