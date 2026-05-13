@@ -422,15 +422,17 @@
           return;
         }
         historyList.innerHTML = items.map((it) => {
-          const when = new Date(it.created_at).toLocaleString();
-          const dirCls = it.direction === 'incoming' ? 'dir incoming' : 'dir';
+          const dt = new Date(it.created_at);
+          const fullWhen = dt.toLocaleString();
+          const shortWhen = formatShortWhen(dt);
+          const dirCls = it.direction === 'incoming' ? 'tag-row incoming' : 'tag-row';
+          const tagText = `${it.direction} ${it.kind}`;
           return `
             <div class="history-row" data-id="${escapeHtml(it.id)}" data-kind="${escapeHtml(it.kind)}">
-              <span class="${dirCls}">${escapeHtml(it.direction)}</span>
-              <span class="kind">${escapeHtml(it.kind)}</span>
+              <span class="${dirCls}">${escapeHtml(tagText)}</span>
               <span class="preview" title="${escapeHtml(it.preview)}">${escapeHtml(it.preview)}</span>
               <span class="size">${formatBytes(it.size_bytes)}</span>
-              <span class="when">${escapeHtml(when)}</span>
+              <span class="when" title="${escapeHtml(fullWhen)}">${escapeHtml(shortWhen)}</span>
               <button class="btn btn-ghost row-copy">Copy</button>
             </div>`;
         }).join('');
@@ -464,6 +466,23 @@
       if (n < 1024) return n + ' B';
       if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB';
       return (n / (1024 * 1024)).toFixed(1) + ' MB';
+    }
+    // Compact "when" — time only for today, "MMM D, h:mma" for older,
+    // year suffix when it differs from now. Full timestamp lives in the
+    // tooltip.
+    function formatShortWhen(d) {
+      const now = new Date();
+      const sameDay =
+        d.getFullYear() === now.getFullYear() &&
+        d.getMonth() === now.getMonth() &&
+        d.getDate() === now.getDate();
+      const time = d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+      if (sameDay) return time;
+      const opts = d.getFullYear() === now.getFullYear()
+        ? { month: 'short', day: 'numeric' }
+        : { month: 'short', day: 'numeric', year: '2-digit' };
+      const datePart = d.toLocaleDateString(undefined, opts);
+      return `${datePart}, ${time}`;
     }
     function escapeHtml(s) {
       return String(s).replace(/[&<>"']/g, (c) => ({

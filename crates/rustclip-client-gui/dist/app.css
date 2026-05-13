@@ -423,8 +423,8 @@ input:focus {
 #history-list { display: flex; flex-direction: column; }
 .history-row {
   display: grid;
-  grid-template-columns: 62px 60px 1fr auto 130px auto;
-  gap: 12px;
+  grid-template-columns: minmax(120px, max-content) 1fr auto auto auto;
+  gap: 14px;
   padding: 12px 18px;
   border-bottom: 1px solid var(--border-soft);
   align-items: center;
@@ -433,21 +433,21 @@ input:focus {
 }
 .history-row:last-child { border-bottom: 0; }
 .history-row:hover { background: var(--accent-bg-weak); }
-.history-row .dir {
+.history-row .tag-row {
   color: var(--text-muted);
   text-transform: uppercase; letter-spacing: 0.06em; font-size: 10.5px;
-  padding: 3px 8px;
+  padding: 4px 10px;
   background: var(--surface-2);
   border-radius: 999px;
   border: 1px solid var(--border-soft);
   text-align: center;
+  white-space: nowrap;
+  justify-self: start;
 }
-.history-row .dir.incoming { color: var(--accent); border-color: rgba(255, 168, 102, 0.35); background: var(--accent-bg); }
-.history-row .kind {
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: 11px;
-  text-transform: uppercase; letter-spacing: 0.05em;
+.history-row .tag-row.incoming {
+  color: var(--accent);
+  border-color: rgba(255, 168, 102, 0.35);
+  background: var(--accent-bg);
 }
 .history-row .preview {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -460,10 +460,13 @@ input:focus {
   text-align: right;
   color: var(--text-muted);
   font-size: 12px;
+  white-space: nowrap;
 }
 .history-row .when {
   color: var(--text-muted); font-size: 12px;
   text-align: right;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
 }
 .history-empty {
   color: var(--text-muted);
@@ -562,7 +565,7 @@ input:focus {
 @media (max-width: 600px) {
   .form-grid { grid-template-columns: 1fr; }
   .history-row { grid-template-columns: auto 1fr auto; gap: 8px; }
-  .history-row .kind, .history-row .size, .history-row .when { display: none; }
+  .history-row .size, .history-row .when { display: none; }
   .panel-head { flex-direction: column; align-items: stretch; }
   .panel-actions { flex-direction: row; }
 }
