@@ -114,6 +114,16 @@
         </label>
         <p class="muted-note">Press this anywhere on your system to re-copy the most recent received clip onto the OS clipboard. Useful when paste fails (e.g. a remote desktop cleared the clipboard). Leave blank to disable.</p>
       </div>
+      <div class="settings-group">
+        <h3>Diagnostics</h3>
+        <div class="button-row">
+          <button id="open-logs-btn" class="btn btn-ghost">Open logs folder</button>
+          <button id="export-logs-btn" class="btn btn-ghost">Export logs (.zip)</button>
+        </div>
+        <p class="muted-note">RustClip writes a daily rolling log to your local data directory. If sync or paste isn't working, export the zip and share it with support.</p>
+        <p class="muted-note muted-path"><code id="log-dir-path">…</code></p>
+        <div id="diagnostics-msg" class="status"></div>
+      </div>
       <div id="settings-msg" class="status"></div>
     </section>
 

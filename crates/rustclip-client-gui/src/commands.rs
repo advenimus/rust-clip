@@ -2,6 +2,10 @@
 //! `rustclip_client::gui_api` helper and returns a `Result<T, String>`
 //! (Tauri serializes the `String` back to the frontend).
 
+use std::fs;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+
 use arboard::Clipboard;
 use rustclip_client::gui_api::{
     AccountStatus, ClientConfigView, EnrollInput, HistoryEntryView, LoginInput, clear_history,
@@ -9,10 +13,15 @@ use rustclip_client::gui_api::{
     local_account, login, logout, reset, set_client_config,
 };
 use rustclip_client::history::HistoryKind;
+use rustclip_client::log_setup;
 use serde::Serialize;
+use tauri::async_runtime::spawn_blocking;
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt;
+use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
+use time::OffsetDateTime;
+use time::macros::format_description;
 
 use crate::{AppState, tray, updater};
 
@@ -341,4 +350,198 @@ pub async fn cmd_set_client_config(
     // surfaces a `recopy-hotkey-error` event for the UI.
     crate::hotkey::re_register(&app, &updated.recopy_hotkey);
     Ok(updated)
+}
+
+/// Return the absolute path to the on-disk log directory. UI displays
+/// it under the Diagnostics buttons so users know where to look even
+/// without clicking through.
+#[tauri::command]
+pub async fn cmd_log_dir() -> Result<String, String> {
+    Ok(log_setup::log_dir().to_string_lossy().to_string())
+}
+
+/// Reveal the log directory in the user's file manager. Creates it
+/// first if it doesn't exist yet — a fresh install with sync never
+/// enabled may not have rotated a log file yet, and we'd rather show
+/// an empty folder than fail with "no such file."
+#[tauri::command]
+pub async fn cmd_open_log_dir(app: AppHandle) -> Result<(), String> {
+    let dir = log_setup::log_dir();
+    if let Err(e) = fs::create_dir_all(&dir) {
+        return Err(format!("create log dir: {e}"));
+    }
+    app.opener()
+        .open_path(dir.to_string_lossy().to_string(), None::<&str>)
+        .map_err(|e| e.to_string())
+}
+
+/// Pack the recent daily log files into a zip the user picks a
+/// location for. Returns the chosen path, or `None` if they cancelled
+/// the save dialog. Files matching the daily-rolling pattern
+/// `<prefix>.YYYY-MM-DD.<suffix>` are included; nothing else in the
+/// log directory is touched.
+#[tauri::command]
+pub async fn cmd_export_logs_zip(app: AppHandle) -> Result<Option<String>, String> {
+    let stamp = OffsetDateTime::now_utc()
+        .format(format_description!(
+            "[year][month][day]-[hour][minute][second]"
+        ))
+        .unwrap_or_else(|_| "now".into());
+    let default_name = format!("rustclip-logs-{stamp}.zip");
+
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    app.dialog()
+        .file()
+        .set_file_name(&default_name)
+        .add_filter("Zip archive", &["zip"])
+        .save_file(move |path| {
+            let _ = tx.send(path);
+        });
+    let chosen = rx.await.map_err(|e| format!("save-file channel: {e}"))?;
+    let Some(file_path) = chosen else {
+        return Ok(None);
+    };
+    let target: PathBuf = file_path
+        .as_path()
+        .ok_or_else(|| "save-file dialog returned a non-path URL".to_string())?
+        .to_path_buf();
+
+    let log_dir = log_setup::log_dir();
+    let prefix = log_setup::log_file_prefix().to_string();
+    let suffix = log_setup::log_file_suffix().to_string();
+    let target_for_task = target.clone();
+
+    let written =
+        spawn_blocking(move || write_logs_zip(&log_dir, &prefix, &suffix, &target_for_task))
+            .await
+            .map_err(|e| format!("zip task join: {e}"))??;
+
+    tracing::info!(
+        target = %target.display(),
+        files = written,
+        "exported logs to zip"
+    );
+
+    Ok(Some(target.to_string_lossy().to_string()))
+}
+
+/// Walk the log directory and write any daily-rolling log file into
+/// `dst` as a deflate-compressed zip. Returns the number of files
+/// packed. Runs on a blocking thread because zip writes can be large
+/// and `std::io::copy` is sync. If the log directory is missing or
+/// empty, the zip is still produced — with a single placeholder text
+/// entry — so the user always gets a file they can hand back.
+fn write_logs_zip(log_dir: &Path, prefix: &str, suffix: &str, dst: &Path) -> Result<usize, String> {
+    let f = fs::File::create(dst).map_err(|e| format!("create zip: {e}"))?;
+    let mut zw = zip::ZipWriter::new(f);
+    let opts = zip::write::SimpleFileOptions::default()
+        .compression_method(zip::CompressionMethod::Deflated);
+
+    let mut names: Vec<(String, PathBuf)> = Vec::new();
+    if log_dir.exists() {
+        let entries = fs::read_dir(log_dir).map_err(|e| format!("read log dir: {e}"))?;
+        for entry in entries {
+            let Ok(entry) = entry else { continue };
+            let Ok(ft) = entry.file_type() else { continue };
+            if !ft.is_file() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            if is_daily_log(&name, prefix, suffix) {
+                names.push((name, entry.path()));
+            }
+        }
+        names.sort_by(|a, b| a.0.cmp(&b.0));
+    }
+
+    if names.is_empty() {
+        zw.start_file("README.txt", opts)
+            .map_err(|e| format!("zip placeholder: {e}"))?;
+        let msg = format!(
+            "No RustClip log files were found in {}.\n\
+             If you expected logs here, the GUI may not have been launched\n\
+             since the logging feature shipped — try copying or pasting\n\
+             something and exporting again.\n",
+            log_dir.display()
+        );
+        zw.write_all(msg.as_bytes())
+            .map_err(|e| format!("zip placeholder write: {e}"))?;
+        zw.finish().map_err(|e| format!("finish zip: {e}"))?;
+        return Ok(0);
+    }
+
+    let mut count: usize = 0;
+    for (name, path) in names {
+        zw.start_file(&name, opts)
+            .map_err(|e| format!("zip start_file {name}: {e}"))?;
+        let mut src = fs::File::open(&path).map_err(|e| format!("open {}: {e}", path.display()))?;
+        std::io::copy(&mut src, &mut zw).map_err(|e| format!("copy {}: {e}", path.display()))?;
+        count += 1;
+    }
+    zw.finish().map_err(|e| format!("finish zip: {e}"))?;
+    Ok(count)
+}
+
+fn is_daily_log(name: &str, prefix: &str, suffix: &str) -> bool {
+    // tracing-appender daily rolling: <prefix>.YYYY-MM-DD.<suffix>
+    // Require a non-empty stamp between the dots; otherwise an
+    // unrelated `<prefix>.<suffix>` file would slip through.
+    let head = format!("{prefix}.");
+    let tail = format!(".{suffix}");
+    name.starts_with(&head) && name.ends_with(&tail) && name.len() > head.len() + tail.len()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn is_daily_log_matches_appender_output() {
+        assert!(is_daily_log("rustclip.2026-05-13.log", "rustclip", "log"));
+        assert!(!is_daily_log("rustclip", "rustclip", "log"));
+        assert!(!is_daily_log("rustclip.log", "rustclip", "log"));
+        assert!(!is_daily_log("other.2026-05-13.log", "rustclip", "log"));
+        assert!(!is_daily_log("rustclip.2026-05-13.txt", "rustclip", "log"));
+    }
+
+    #[test]
+    fn write_logs_zip_packs_matching_files() {
+        let src = TempDir::new().unwrap();
+        let dst = TempDir::new().unwrap();
+        fs::write(src.path().join("rustclip.2026-05-13.log"), b"day-one").unwrap();
+        fs::write(src.path().join("rustclip.2026-05-12.log"), b"day-zero").unwrap();
+        fs::write(src.path().join("not-a-log.txt"), b"ignore me").unwrap();
+
+        let zip_path = dst.path().join("logs.zip");
+        let n = write_logs_zip(src.path(), "rustclip", "log", &zip_path).unwrap();
+        assert_eq!(n, 2);
+
+        // Re-open the produced zip and confirm exactly the two log files.
+        let zf = fs::File::open(&zip_path).unwrap();
+        let mut zr = zip::ZipArchive::new(zf).unwrap();
+        assert_eq!(zr.len(), 2);
+        let mut names: Vec<String> = (0..zr.len())
+            .map(|i| zr.by_index(i).unwrap().name().to_string())
+            .collect();
+        names.sort();
+        assert_eq!(
+            names,
+            vec!["rustclip.2026-05-12.log", "rustclip.2026-05-13.log"]
+        );
+    }
+
+    #[test]
+    fn write_logs_zip_writes_placeholder_when_empty() {
+        let src = TempDir::new().unwrap();
+        let dst = TempDir::new().unwrap();
+        let zip_path = dst.path().join("logs.zip");
+        let n = write_logs_zip(src.path(), "rustclip", "log", &zip_path).unwrap();
+        assert_eq!(n, 0);
+
+        let zf = fs::File::open(&zip_path).unwrap();
+        let mut zr = zip::ZipArchive::new(zf).unwrap();
+        assert_eq!(zr.len(), 1);
+        assert_eq!(zr.by_index(0).unwrap().name(), "README.txt");
+    }
 }

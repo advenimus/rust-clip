@@ -16,9 +16,9 @@ mod updater;
 
 use std::sync::Arc;
 
+use rustclip_client::log_setup;
 use tauri::async_runtime::Mutex;
 use tauri_plugin_autostart::MacosLauncher;
-use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::sync_runner::SyncRunner;
 
@@ -29,7 +29,10 @@ pub struct AppStateInner {
 pub type AppState = Arc<Mutex<AppStateInner>>;
 
 fn main() {
-    init_tracing();
+    // Hold the appender's worker guard for the lifetime of the
+    // process; dropping it would stop the background flush thread
+    // and silently lose subsequent file logs.
+    let _log_guard = log_setup::init_dual().ok().flatten();
 
     let sync = Arc::new(SyncRunner::new());
     let app_state: AppState = Arc::new(Mutex::new(AppStateInner { sync: sync.clone() }));
@@ -122,6 +125,9 @@ fn main() {
             commands::cmd_update_install_kind,
             commands::cmd_get_client_config,
             commands::cmd_set_client_config,
+            commands::cmd_log_dir,
+            commands::cmd_open_log_dir,
+            commands::cmd_export_logs_zip,
         ])
         .on_window_event(|window, event| {
             // Closing a UI window should hide it rather than quit the app;
@@ -133,11 +139,4 @@ fn main() {
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
-}
-
-fn init_tracing() {
-    let filter = EnvFilter::try_from_env("RUSTCLIP_LOG_LEVEL")
-        .or_else(|_| EnvFilter::try_new("warn,rustclip_client=info,rustclip_client_gui=info"))
-        .expect("static filter");
-    let _ = fmt().with_env_filter(filter).try_init();
 }
