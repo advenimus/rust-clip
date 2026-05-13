@@ -329,6 +329,15 @@ pub struct ClientConfigView {
     pub auto_sync_files: bool,
     pub auto_sync_max_bytes: u64,
     pub notifications_enabled: bool,
+    /// Tri-state guard mode. Serializes as `"off" | "empty_only" |
+    /// "aggressive"`. The legacy `clipboard_guard_enabled` bool is
+    /// still accepted on input (backwards compat with older
+    /// frontends) but the mode field is authoritative.
+    pub clipboard_guard_mode: crate::config::GuardMode,
+    /// Legacy bool. Read-only from the frontend's perspective — kept
+    /// in sync with `clipboard_guard_mode` so an older webview can
+    /// still display "guard on/off" while the new tri-state UI rolls
+    /// out.
     pub clipboard_guard_enabled: bool,
     pub clipboard_guard_seconds: u32,
     pub recopy_hotkey_enabled: bool,
@@ -341,6 +350,7 @@ impl From<ClientConfig> for ClientConfigView {
             auto_sync_files: c.auto_sync_files,
             auto_sync_max_bytes: c.auto_sync_max_bytes,
             notifications_enabled: c.notifications_enabled,
+            clipboard_guard_mode: c.clipboard_guard_mode,
             clipboard_guard_enabled: c.clipboard_guard_enabled,
             clipboard_guard_seconds: c.clipboard_guard_seconds,
             recopy_hotkey_enabled: c.recopy_hotkey_enabled,
@@ -355,6 +365,7 @@ impl From<ClientConfigView> for ClientConfig {
             auto_sync_files: v.auto_sync_files,
             auto_sync_max_bytes: v.auto_sync_max_bytes,
             notifications_enabled: v.notifications_enabled,
+            clipboard_guard_mode: v.clipboard_guard_mode,
             clipboard_guard_enabled: v.clipboard_guard_enabled,
             clipboard_guard_seconds: v.clipboard_guard_seconds,
             recopy_hotkey_enabled: v.recopy_hotkey_enabled,

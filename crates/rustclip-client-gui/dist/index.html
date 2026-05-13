@@ -243,19 +243,24 @@
         <header class="card-head">
           <div>
             <h2 class="card-title">Clipboard guard <span class="tag">VDI</span></h2>
-            <p class="card-sub">Re-assert the clipboard if it gets cleared right after sync writes to it.</p>
+            <p class="card-sub">Re-assert the clipboard if a remote desktop or VDI channel clears or stomps it.</p>
           </div>
         </header>
         <div class="card-body">
-          <label class="switch" for="clipboard-guard-toggle">
-            <input type="checkbox" id="clipboard-guard-toggle">
-            <span class="switch-track"><span class="switch-thumb"></span></span>
-            <span class="switch-text">
-              <strong>Re-assert clipboard if cleared after sync</strong>
-              <small>Only re-writes when the clipboard is empty, so it never fights a real copy. Capped at 3 retries per clip.</small>
-            </span>
+          <label class="inline-field guard-mode-field">
+            <span>Mode</span>
+            <select id="clipboard-guard-mode" class="select">
+              <option value="off">Off</option>
+              <option value="empty_only">Re-assert if cleared</option>
+              <option value="aggressive">Aggressive (override stale-direction stomps)</option>
+            </select>
           </label>
-          <div class="sub-row" data-bound-to="clipboard-guard-toggle">
+          <ul class="guard-modes-help">
+            <li><strong>Off</strong> — never re-write the clipboard after a sync. Safe default.</li>
+            <li><strong>Re-assert if cleared</strong> — re-write the last received clip if the OS clipboard goes empty within the window. Never fights a real copy since it only fires on empty.</li>
+            <li><strong>Aggressive</strong> — also re-write if a one-way channel (Citrix host→guest, RDP guest tools) stomps your paste with a previously-received clip. For nested-VDI scenarios where both ends run RustClip. Capped at 3 re-assertions per clip.</li>
+          </ul>
+          <div class="sub-row" data-guard-mode-sub>
             <label class="inline-field">
               <span>Re-assert window</span>
               <span class="num-suffix">

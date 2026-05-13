@@ -106,9 +106,13 @@ mod platform {
     use std::{
         os::windows::ffi::{OsStrExt, OsStringExt},
         path::PathBuf,
+        thread,
+        time::Duration,
     };
 
     use anyhow::{Result, anyhow};
+    use rand::Rng;
+    use tracing::{debug, warn};
     use windows::Win32::{
         Foundation::HANDLE,
         System::{
@@ -125,12 +129,57 @@ mod platform {
     // feature of the `windows` crate for a single integer constant.
     const CF_HDROP: u32 = 15;
 
+    /// Total attempts at OpenClipboard before giving up. Antivirus,
+    /// Citrix Receiver, and other clipboard managers commonly hold the
+    /// clipboard briefly — typically <50 ms — so a small retry budget
+    /// converts a "drop the clip" into "user pastes a moment later."
+    const OPEN_MAX_ATTEMPTS: u32 = 5;
+    /// Base sleep between OpenClipboard retries (±25% jitter, same
+    /// pattern as the WS reconnect backoff in `sync.rs`).
+    const OPEN_RETRY_BASE_MS: u64 = 50;
+
     struct ClipboardGuard;
     impl ClipboardGuard {
         fn open() -> Result<Self> {
-            unsafe { OpenClipboard(None) }.map_err(|e| anyhow!("OpenClipboard: {e}"))?;
-            Ok(Self)
+            let mut last_err: Option<windows::core::Error> = None;
+            for attempt in 1..=OPEN_MAX_ATTEMPTS {
+                match unsafe { OpenClipboard(None) } {
+                    Ok(()) => return Ok(Self),
+                    Err(e) => {
+                        debug!(
+                            attempt,
+                            max = OPEN_MAX_ATTEMPTS,
+                            error = %e,
+                            "OpenClipboard failed, will retry"
+                        );
+                        last_err = Some(e);
+                        if attempt < OPEN_MAX_ATTEMPTS {
+                            thread::sleep(retry_delay(OPEN_RETRY_BASE_MS));
+                        }
+                    }
+                }
+            }
+            let err = last_err.expect("attempted at least once");
+            warn!(
+                attempts = OPEN_MAX_ATTEMPTS,
+                error = %err,
+                "OpenClipboard failed after retries"
+            );
+            Err(anyhow!("OpenClipboard: {err}"))
         }
+    }
+
+    /// Returns a Duration with ±25% jitter around `base_ms`. Mirrors
+    /// the WS reconnect helper so behavior stays consistent across the
+    /// codebase.
+    fn retry_delay(base_ms: u64) -> Duration {
+        if base_ms == 0 {
+            return Duration::ZERO;
+        }
+        let spread = base_ms / 4;
+        let offset = rand::thread_rng().gen_range(0..=spread * 2);
+        let jittered = base_ms.saturating_sub(spread).saturating_add(offset);
+        Duration::from_millis(jittered)
     }
     impl Drop for ClipboardGuard {
         fn drop(&mut self) {

@@ -1,5 +1,8 @@
 //! System tray icon + menu. Rebuilt on status or history change.
 
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
+
 use anyhow::Result;
 use rustclip_client::log_setup;
 use tauri::{
@@ -15,6 +18,60 @@ use crate::AppState;
 use crate::commands::open_or_focus;
 
 const TRAY_ID: &str = "rustclip-tray";
+
+/// How long a transient error message ("Error applying clip") stays
+/// visible in the tray status row before reverting to the normal
+/// connection state. 5 s is long enough to register, short enough
+/// not to mislead the user about current state.
+const TRANSIENT_ERROR_DURATION: Duration = Duration::from_secs(5);
+
+/// Currently-active transient status override (e.g. an apply failure
+/// that just came in from the clipboard worker). [`current_transient`]
+/// reads it and clears the slot if it has expired. Plain `Mutex` is
+/// fine — this is touched a few times per error event, not in a hot path.
+static TRANSIENT: Mutex<Option<TransientStatus>> = Mutex::new(None);
+
+struct TransientStatus {
+    message: String,
+    expires_at: Instant,
+}
+
+/// Show a short-lived status message in the tray status row. The
+/// caller is responsible for triggering a [`refresh_menu`] both
+/// immediately AND after [`TRANSIENT_ERROR_DURATION`] so the row
+/// reverts on its own.
+pub fn set_transient_status(message: impl Into<String>) {
+    if let Ok(mut g) = TRANSIENT.lock() {
+        *g = Some(TransientStatus {
+            message: message.into(),
+            expires_at: Instant::now() + TRANSIENT_ERROR_DURATION,
+        });
+    }
+}
+
+fn current_transient() -> Option<String> {
+    let mut g = TRANSIENT.lock().ok()?;
+    let now = Instant::now();
+    if let Some(t) = g.as_ref() {
+        if t.expires_at > now {
+            return Some(t.message.clone());
+        }
+        *g = None;
+    }
+    None
+}
+
+/// Convenience: surface `message` as the tray status and schedule the
+/// follow-up refresh so it reverts after [`TRANSIENT_ERROR_DURATION`].
+pub fn flash_transient_status(app: &AppHandle, message: impl Into<String>) {
+    set_transient_status(message);
+    let app1 = app.clone();
+    tauri::async_runtime::spawn(async move {
+        refresh_menu(&app1).await;
+        tokio::time::sleep(TRANSIENT_ERROR_DURATION).await;
+        refresh_menu(&app1).await;
+    });
+}
 
 pub fn install(app: &AppHandle) -> Result<()> {
     // macOS menu bar: white template icon that the OS auto-inverts per light/dark bar.
@@ -76,7 +133,7 @@ async fn refresh_menu_inner(app: &AppHandle) -> Result<()> {
     drop(inner);
 
     let account = rustclip_client::gui_api::local_account().ok().flatten();
-    let status_label = match (&account, sync_status) {
+    let base_label = match (&account, sync_status) {
         (None, _) => "Not enrolled".to_string(),
         (Some(a), crate::sync_runner::SyncStatus::Running) => {
             format!("Connected · {}", a.username)
@@ -88,6 +145,10 @@ async fn refresh_menu_inner(app: &AppHandle) -> Result<()> {
             format!("Error · {}", a.username)
         }
     };
+    // Transient status takes precedence so a fresh "Error applying clip"
+    // is immediately visible without losing context — auto-clears.
+    let transient = current_transient();
+    let status_label = transient.clone().unwrap_or_else(|| base_label.clone());
 
     let history = rustclip_client::gui_api::list_history(10).unwrap_or_default();
     let mut history_items: Vec<MenuItem<tauri::Wry>> = Vec::new();
@@ -156,10 +217,14 @@ async fn refresh_menu_inner(app: &AppHandle) -> Result<()> {
 
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
         tray.set_menu(Some(menu))?;
-        let tooltip = match sync_status {
-            crate::sync_runner::SyncStatus::Running => "RustClip — connected",
-            crate::sync_runner::SyncStatus::Stopped => "RustClip — offline",
-            crate::sync_runner::SyncStatus::Failed => "RustClip — error",
+        let tooltip = if transient.is_some() {
+            "RustClip — apply failed (see Diagnostics)"
+        } else {
+            match sync_status {
+                crate::sync_runner::SyncStatus::Running => "RustClip — connected",
+                crate::sync_runner::SyncStatus::Stopped => "RustClip — offline",
+                crate::sync_runner::SyncStatus::Failed => "RustClip — error",
+            }
         };
         tray.set_tooltip(Some(tooltip))?;
     }
