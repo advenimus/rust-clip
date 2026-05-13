@@ -245,10 +245,21 @@ pub fn history_item_text(entry_id: &str) -> Result<Option<String>> {
     let id = Uuid::parse_str(entry_id).context("parsing history id")?;
     let history = open_history_best_effort()?;
     let items = history.list(history::DEFAULT_MAX_ITEMS)?;
-    Ok(items
+    let Some(row) = items
         .into_iter()
         .find(|it| it.id == id && matches!(it.kind, HistoryKind::Text))
-        .map(|it| it.preview))
+    else {
+        return Ok(None);
+    };
+    // Prefer the encrypted full-text column added in v0.4.2 so long
+    // text round-trips intact. Legacy rows (recorded before the
+    // column existed) and rows we can't decrypt fall back to the
+    // truncated preview so re-copy still produces *something* rather
+    // than failing.
+    if let Some(full) = history.full_text(id)? {
+        return Ok(Some(full));
+    }
+    Ok(Some(row.preview))
 }
 
 /// Look up the kind of a single history row (text / image / bundle).

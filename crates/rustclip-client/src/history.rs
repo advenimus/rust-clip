@@ -170,6 +170,7 @@ impl History {
             HistoryKind::Text,
             &preview,
             text.len() as i64,
+            Some(text),
         )
     }
 
@@ -188,6 +189,7 @@ impl History {
             HistoryKind::Image,
             &preview,
             size_bytes,
+            None,
         )
     }
 
@@ -204,6 +206,7 @@ impl History {
             HistoryKind::Bundle,
             summary,
             size_bytes,
+            None,
         )
     }
 
@@ -214,26 +217,53 @@ impl History {
         kind: HistoryKind,
         preview: &str,
         size_bytes: i64,
+        full_text: Option<&str>,
     ) -> Result<()> {
         let now = now_millis();
-        let stored = self.encode_preview(preview)?;
+        let stored_preview = self.encode_preview(preview)?;
+        let stored_full_text = match full_text {
+            Some(t) => Some(self.encode_preview(t)?),
+            None => None,
+        };
         self.conn
             .execute(
                 "INSERT OR REPLACE INTO history_items \
-                 (id, direction, kind, preview, size_bytes, created_at) \
-                 VALUES (?, ?, ?, ?, ?, ?)",
+                 (id, direction, kind, preview, size_bytes, created_at, full_text) \
+                 VALUES (?, ?, ?, ?, ?, ?, ?)",
                 params![
                     event_id.as_bytes().as_slice(),
                     direction.as_str(),
                     kind.as_str(),
-                    stored,
+                    stored_preview,
                     size_bytes,
                     now,
+                    stored_full_text,
                 ],
             )
             .context("inserting history row")?;
         self.enforce_retention(DEFAULT_MAX_ITEMS, DEFAULT_MAX_AGE_MS, now)?;
         Ok(())
+    }
+
+    /// Read the encrypted full text for a row, if persisted. Returns
+    /// `Ok(None)` for image/bundle rows, legacy text rows that predate
+    /// the `full_text` column, and rows whose ciphertext can't be
+    /// decoded (wrong key, no cipher, malformed). The gui_api caller
+    /// falls back to the truncated preview in those cases.
+    pub fn full_text(&self, id: Uuid) -> Result<Option<String>> {
+        let stored: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT full_text FROM history_items WHERE id = ?",
+                params![id.as_bytes().as_slice()],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .or_else(|e| match e {
+                rusqlite::Error::QueryReturnedNoRows => Ok(None),
+                other => Err(other),
+            })
+            .context("reading full_text")?;
+        Ok(stored.and_then(|s| self.try_decode_preview(&s)))
     }
 
     fn encode_preview(&self, preview: &str) -> Result<String> {
@@ -271,6 +301,26 @@ impl History {
             // Legacy plaintext row written before M6.
             stored.to_string()
         }
+    }
+
+    /// Same wire format as `decode_preview` but returns `None` on any
+    /// decode/decrypt failure instead of a human-readable stub string.
+    /// `full_text` callers use this to distinguish real plaintext —
+    /// even if the plaintext literally starts with "(undecryptable" —
+    /// from a genuine decryption failure.
+    fn try_decode_preview(&self, stored: &str) -> Option<String> {
+        let Some(body) = stored.strip_prefix(ENCRYPTED_PREFIX) else {
+            return Some(stored.to_string());
+        };
+        let cipher = self.cipher.as_ref()?;
+        let combined = BASE64.decode(body.as_bytes()).ok()?;
+        if combined.len() <= 24 {
+            return None;
+        }
+        let (nonce_bytes, ct) = combined.split_at(24);
+        let nonce = XNonce::from_slice(nonce_bytes);
+        let pt = cipher.decrypt(nonce, ct).ok()?;
+        Some(String::from_utf8_lossy(&pt).into_owned())
     }
 
     pub fn list(&self, limit: i64) -> Result<Vec<HistoryItem>> {
@@ -467,7 +517,19 @@ fn init_schema(conn: &Connection) -> Result<()> {
          ); \
          CREATE INDEX IF NOT EXISTS history_items_time ON history_items(created_at DESC);",
     )
-    .context("initializing history schema")
+    .context("initializing history schema")?;
+
+    // v0.4.2: add an encrypted full-text column so recopy restores the
+    // full original content, not the 400-char preview. Idempotent —
+    // SQLite raises "duplicate column name" on the second run; swallow
+    // exactly that one and surface anything else.
+    match conn.execute("ALTER TABLE history_items ADD COLUMN full_text TEXT", []) {
+        Ok(_) => Ok(()),
+        Err(rusqlite::Error::SqliteFailure(_, Some(msg))) if msg.contains("duplicate column") => {
+            Ok(())
+        }
+        Err(e) => Err(e).context("adding full_text column"),
+    }
 }
 
 pub fn history_path() -> PathBuf {
@@ -709,5 +771,132 @@ mod tests {
             after.is_empty(),
             "expected image-history dir empty, got {after:?}"
         );
+    }
+
+    #[test]
+    fn record_text_persists_full_text_over_preview_cap() {
+        let key = [21u8; 32];
+        let (_tmp, mut h) = open_test_encrypted(key);
+        let long: String = "abcdef0123456789".repeat((PREVIEW_MAX_CHARS / 4) + 100);
+        assert!(long.chars().count() > PREVIEW_MAX_CHARS);
+        let id = Uuid::new_v4();
+        h.record_text(Direction::Outgoing, &long, id).unwrap();
+
+        // Preview still truncates with '…' for fast list rendering.
+        let items = h.list(1).unwrap();
+        assert!(items[0].preview.ends_with('…'));
+        assert!(items[0].preview.chars().count() <= PREVIEW_MAX_CHARS + 1);
+
+        // Full text round-trips byte-for-byte through the new column.
+        let recovered = h.full_text(id).unwrap().expect("full_text present");
+        assert_eq!(recovered, long);
+    }
+
+    #[test]
+    fn full_text_survives_reopen_with_same_key() {
+        let key = [99u8; 32];
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("history.db");
+        let id = Uuid::new_v4();
+        let long = "long-clip-".repeat(PREVIEW_MAX_CHARS);
+        {
+            let mut h = History::open_with_key(&path, &key).unwrap();
+            h.record_text(Direction::Outgoing, &long, id).unwrap();
+        }
+        let h = History::open_with_key(&path, &key).unwrap();
+        assert_eq!(h.full_text(id).unwrap().as_deref(), Some(long.as_str()));
+    }
+
+    #[test]
+    fn full_text_none_for_image_and_bundle_rows() {
+        let (_tmp, mut h) = open_test();
+        let img_id = Uuid::new_v4();
+        let bundle_id = Uuid::new_v4();
+        h.record_image(Direction::Outgoing, 8, 8, 256, img_id)
+            .unwrap();
+        h.record_bundle(Direction::Outgoing, "files (2)", 1024, bundle_id)
+            .unwrap();
+        assert!(h.full_text(img_id).unwrap().is_none());
+        assert!(h.full_text(bundle_id).unwrap().is_none());
+    }
+
+    #[test]
+    fn full_text_none_for_unknown_id() {
+        let (_tmp, h) = open_test();
+        assert!(h.full_text(Uuid::new_v4()).unwrap().is_none());
+    }
+
+    #[test]
+    fn legacy_row_without_full_text_returns_none() {
+        // Simulate a row recorded before v0.4.2 by inserting directly
+        // with full_text = NULL. history_item_text in gui_api should
+        // fall back to the preview, which this test asserts indirectly
+        // by checking full_text() returns None so the caller can fall
+        // back.
+        let (_tmp, h) = open_test();
+        let id = Uuid::new_v4();
+        h.conn
+            .execute(
+                "INSERT INTO history_items \
+                 (id, direction, kind, preview, size_bytes, created_at, full_text) \
+                 VALUES (?, 'outgoing', 'text', 'legacy', 6, ?, NULL)",
+                params![id.as_bytes().as_slice(), now_millis()],
+            )
+            .unwrap();
+        assert!(h.full_text(id).unwrap().is_none());
+        assert_eq!(h.list(1).unwrap()[0].preview, "legacy");
+    }
+
+    #[test]
+    fn full_text_with_wrong_key_returns_none() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("history.db");
+        let id = Uuid::new_v4();
+        let long = "secret-".repeat(PREVIEW_MAX_CHARS);
+        {
+            let mut h = History::open_with_key(&path, &[3u8; 32]).unwrap();
+            h.record_text(Direction::Outgoing, &long, id).unwrap();
+        }
+        // Different key — decryption produces a stub which full_text()
+        // maps to Ok(None) so the caller falls back to the preview.
+        let h = History::open_with_key(&path, &[7u8; 32]).unwrap();
+        assert!(h.full_text(id).unwrap().is_none());
+    }
+
+    #[test]
+    fn full_text_round_trips_text_that_looks_like_a_decrypt_stub() {
+        // Regression: an earlier version of full_text() detected
+        // decryption failure by string-matching "(encrypted)" /
+        // "(undecryptable…" on the decoded plaintext, which would
+        // silently drop user content that happened to start with those
+        // tokens. With the typed try_decode_preview helper we should
+        // round-trip these strings verbatim.
+        let key = [55u8; 32];
+        let (_tmp, mut h) = open_test_encrypted(key);
+        let inputs = [
+            "(undecryptable test)",
+            "(undecryptable: wrong key?)",
+            "(encrypted)",
+        ];
+        for input in inputs {
+            let id = Uuid::new_v4();
+            h.record_text(Direction::Outgoing, input, id).unwrap();
+            assert_eq!(
+                h.full_text(id).unwrap().as_deref(),
+                Some(input),
+                "input {input:?} should round-trip verbatim",
+            );
+        }
+    }
+
+    #[test]
+    fn add_column_idempotent_on_existing_db() {
+        // First open creates the column; second open should hit the
+        // duplicate-column path and not error.
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("history.db");
+        let h1 = History::open(&path).unwrap();
+        drop(h1);
+        let _h2 = History::open(&path).unwrap();
     }
 }
