@@ -94,8 +94,13 @@
       </div>
       <div class="settings-group">
         <h3>Clipboard guard</h3>
-        <label class="checkbox">
-          <input type="checkbox" id="clipboard-guard-toggle"> Re-assert clipboard if cleared after sync
+        <label class="inline-select">
+          Mode:
+          <select id="clipboard-guard-mode">
+            <option value="off">Off</option>
+            <option value="empty_only">Re-assert if cleared</option>
+            <option value="aggressive">Aggressive (override stale-direction stomps)</option>
+          </select>
         </label>
         <label class="inline-number">
           Re-assert window:
@@ -103,7 +108,9 @@
           seconds
           <button id="clipboard-guard-save" class="btn btn-ghost">Save</button>
         </label>
-        <p class="muted-note">For VDI / nested remote-desktop scenarios where the clipboard sometimes goes blank after RustClip writes to it. RustClip will only re-write if the clipboard is empty, so this never fights a real copy. Capped at 3 re-assertions per clip.</p>
+        <p class="muted-note"><strong>Off</strong> &mdash; never re-write the clipboard after a sync. Safe default.</p>
+        <p class="muted-note"><strong>Re-assert if cleared</strong> &mdash; re-write the last received clip if the OS clipboard goes empty within the window. Safe for any environment: it never fights a real copy because it only fires on empty.</p>
+        <p class="muted-note"><strong>Aggressive</strong> &mdash; also re-write if a single-direction channel (Citrix host&rarr;guest, RDP guest tools) stomps our paste with a previously-received clip. Intended for nested-VDI scenarios where both ends run RustClip and the channel can't be turned off. Tiny risk of re-asserting your own identical recopy of recent content. Capped at 3 re-assertions per clip.</p>
       </div>
       <div class="settings-group">
         <h3>Re-copy last clip shortcut</h3>
