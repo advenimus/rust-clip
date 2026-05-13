@@ -130,6 +130,8 @@ input:focus { border-color: var(--accent); }
 .settings-group h3 { margin: 0 0 4px; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.09em; color: var(--text-muted); }
 .settings-group label.inline-number { display: inline-flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: normal; }
 .settings-group label.inline-number input[type=number] { width: 80px; }
+.settings-group label.inline-select { display: inline-flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: normal; }
+.settings-group label.inline-select select { padding: 4px 6px; font: inherit; color: inherit; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; }
 .settings-group .muted-note { color: var(--text-muted); font-size: 12px; margin: 0; }
 .settings-group .muted-note code { font-family: var(--font-mono); padding: 1px 4px; background: var(--code-chip-bg); border-radius: 3px; }
 #panel-settings .settings-group:first-child { margin-top: 0; padding-top: 0; border-top: 0; }

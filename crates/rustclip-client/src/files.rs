@@ -63,6 +63,54 @@ pub fn pack(paths: &[PathBuf]) -> Result<FileBundle> {
     })
 }
 
+/// How many times to attempt opening a file before giving up. Real
+/// failure modes that benefit from a few retries:
+/// - Windows Defender or another AV scanner holding the file open
+///   right after the user's copy gesture (PermissionDenied or
+///   ErrorKind::Other depending on the lock type).
+/// - macOS Spotlight indexing transient ENOACCESS races.
+const OPEN_MAX_ATTEMPTS: u32 = 3;
+/// Sleep between open attempts. Short enough to be invisible to the
+/// user; long enough to outlast the typical AV scan window.
+const OPEN_RETRY_DELAY_MS: u64 = 100;
+
+/// Open a file, retrying briefly on transient permission failures.
+/// Anything other than [`std::io::ErrorKind::PermissionDenied`] or
+/// (on Windows) [`std::io::ErrorKind::Other`] returns immediately so
+/// we don't slow down legitimate failures like a missing file.
+fn open_with_retry(path: &Path) -> std::io::Result<fs::File> {
+    let mut last_err: Option<std::io::Error> = None;
+    for attempt in 1..=OPEN_MAX_ATTEMPTS {
+        match fs::File::open(path) {
+            Ok(f) => return Ok(f),
+            Err(e) if is_transient_open_error(&e) => {
+                tracing::debug!(
+                    attempt,
+                    max = OPEN_MAX_ATTEMPTS,
+                    path = %path.display(),
+                    error = %e,
+                    "file open hit transient error, will retry"
+                );
+                last_err = Some(e);
+                if attempt < OPEN_MAX_ATTEMPTS {
+                    std::thread::sleep(std::time::Duration::from_millis(OPEN_RETRY_DELAY_MS));
+                }
+            }
+            Err(e) => return Err(e),
+        }
+    }
+    Err(last_err.expect("attempted at least once"))
+}
+
+fn is_transient_open_error(e: &std::io::Error) -> bool {
+    matches!(e.kind(), std::io::ErrorKind::PermissionDenied)
+        // Windows often surfaces "file in use by another process" as
+        // ErrorKind::Other with raw_os_error = 32 (ERROR_SHARING_VIOLATION).
+        // Don't gate strictly on the OS errno — the kind check is good enough
+        // and avoids cfg(target_os) divergence in this helper.
+        || matches!(e.kind(), std::io::ErrorKind::Other)
+}
+
 /// Pack `paths` into a tar archive, rejecting the job if the total
 /// uncompressed size would exceed `max_bytes`. `None` means uncapped.
 ///
@@ -90,7 +138,7 @@ pub fn pack_checked(paths: &[PathBuf], max_bytes: Option<u64>) -> Result<FileBun
     {
         let mut builder = Builder::new(&mut buf);
         for e in &plan {
-            let mut file = fs::File::open(&e.source)
+            let mut file = open_with_retry(&e.source)
                 .with_context(|| format!("opening {}", e.source.display()))
                 .map_err(PackError::Other)?;
             let mut header = Header::new_gnu();
@@ -431,6 +479,46 @@ fn human_bytes(n: u64) -> String {
 mod tests {
     use super::*;
     use tempfile::TempDir;
+
+    #[test]
+    fn open_with_retry_returns_existing_file() {
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("real.txt");
+        fs::write(&p, b"hi").unwrap();
+        assert!(open_with_retry(&p).is_ok());
+    }
+
+    #[test]
+    fn open_with_retry_returns_not_found_immediately() {
+        // Missing file is NOT a transient class — must not loop.
+        let dir = TempDir::new().unwrap();
+        let p = dir.path().join("does-not-exist.bin");
+        let start = std::time::Instant::now();
+        assert!(open_with_retry(&p).is_err());
+        // 3 attempts × 100 ms = 200 ms of sleep at worst; we expect < 50 ms.
+        assert!(
+            start.elapsed() < std::time::Duration::from_millis(50),
+            "open_with_retry slept on NotFound (elapsed: {:?})",
+            start.elapsed()
+        );
+    }
+
+    #[test]
+    fn transient_errors_are_classified_correctly() {
+        use std::io::ErrorKind;
+        assert!(is_transient_open_error(&std::io::Error::from(
+            ErrorKind::PermissionDenied
+        )));
+        assert!(is_transient_open_error(&std::io::Error::from(
+            ErrorKind::Other
+        )));
+        assert!(!is_transient_open_error(&std::io::Error::from(
+            ErrorKind::NotFound
+        )));
+        assert!(!is_transient_open_error(&std::io::Error::from(
+            ErrorKind::InvalidInput
+        )));
+    }
 
     #[test]
     fn pack_and_unpack_round_trip() {

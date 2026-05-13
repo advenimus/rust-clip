@@ -210,7 +210,7 @@
     const autoSyncMaxMb = document.getElementById('auto-sync-max-mb');
     const autoSyncMaxSave = document.getElementById('auto-sync-max-save');
     const notificationsToggle = document.getElementById('notifications-toggle');
-    const clipboardGuardToggle = document.getElementById('clipboard-guard-toggle');
+    const clipboardGuardMode = document.getElementById('clipboard-guard-mode');
     const clipboardGuardSeconds = document.getElementById('clipboard-guard-seconds');
     const clipboardGuardSave = document.getElementById('clipboard-guard-save');
     const recopyHotkey = document.getElementById('recopy-hotkey');
@@ -229,7 +229,7 @@
         autoSyncFilesToggle.checked = !!cfg.auto_sync_files;
         autoSyncMaxMb.value = Math.max(1, Math.round(cfg.auto_sync_max_bytes / (1024 * 1024)));
         notificationsToggle.checked = !!cfg.notifications_enabled;
-        clipboardGuardToggle.checked = !!cfg.clipboard_guard_enabled;
+        clipboardGuardMode.value = normalizeGuardMode(cfg.clipboard_guard_mode);
         clipboardGuardSeconds.value = clampGuardSeconds(cfg.clipboard_guard_seconds);
         recopyHotkey.value = cfg.recopy_hotkey || '';
       } catch (err) {
@@ -244,21 +244,31 @@
       return n;
     }
 
+    function normalizeGuardMode(v) {
+      if (v === 'aggressive' || v === 'empty_only') return v;
+      return 'off';
+    }
+
     async function saveClientConfig(okMessage) {
       const mb = Math.max(1, parseInt(autoSyncMaxMb.value, 10) || 500);
       const guardSeconds = clampGuardSeconds(clipboardGuardSeconds.value);
+      const guardMode = normalizeGuardMode(clipboardGuardMode.value);
       try {
         const updated = await invoke('cmd_set_client_config', {
           config: {
             auto_sync_files: autoSyncFilesToggle.checked,
             auto_sync_max_bytes: mb * 1024 * 1024,
             notifications_enabled: notificationsToggle.checked,
-            clipboard_guard_enabled: clipboardGuardToggle.checked,
+            clipboard_guard_mode: guardMode,
+            // Legacy bool kept in sync server-side; sent here so older
+            // client logic doesn't drift if it ever reads it directly.
+            clipboard_guard_enabled: guardMode !== 'off',
             clipboard_guard_seconds: guardSeconds,
             recopy_hotkey: recopyHotkey.value.trim(),
           },
         });
         autoSyncMaxMb.value = Math.max(1, Math.round(updated.auto_sync_max_bytes / (1024 * 1024)));
+        clipboardGuardMode.value = normalizeGuardMode(updated.clipboard_guard_mode);
         clipboardGuardSeconds.value = clampGuardSeconds(updated.clipboard_guard_seconds);
         recopyHotkey.value = updated.recopy_hotkey || '';
         setSettingsMsg(okMessage || 'Saved.', 'ok');
@@ -282,7 +292,7 @@
       if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }
     });
     notificationsToggle.addEventListener('change', () => saveClientConfig());
-    clipboardGuardToggle.addEventListener('change', () => saveClientConfig());
+    clipboardGuardMode.addEventListener('change', () => saveClientConfig());
     clipboardGuardSave.addEventListener('click', () => saveClientConfig());
     clipboardGuardSeconds.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); saveClientConfig(); }

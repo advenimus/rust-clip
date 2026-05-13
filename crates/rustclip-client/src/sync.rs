@@ -29,7 +29,7 @@ use zeroize::Zeroizing;
 
 use crate::{
     clipboard::{ClipEvent, ClipboardHandle, GuardSpec},
-    config::ClientConfig,
+    config::{ClientConfig, GuardMode},
     crypto::Cipher,
     files::{self, FileBundle, PackError},
     history::{Direction, History},
@@ -43,6 +43,20 @@ use crate::{
 /// short enough that a runaway clearer (security software, broken VDI
 /// channel) doesn't burn CPU forever.
 const GUARD_MAX_ATTEMPTS: u8 = 3;
+
+/// Build a [`GuardSpec`] from the current [`ClientConfig`] if the
+/// user has enabled the guard. Returns `None` when the mode is `Off`,
+/// in which case the receive path writes without guarding.
+fn guard_spec(cfg: &ClientConfig) -> Option<GuardSpec> {
+    if matches!(cfg.clipboard_guard_mode, GuardMode::Off) {
+        return None;
+    }
+    Some(GuardSpec {
+        seconds: cfg.clipboard_guard_seconds,
+        max_attempts: GUARD_MAX_ATTEMPTS,
+        mode: cfg.clipboard_guard_mode,
+    })
+}
 
 const RECONNECT_INITIAL: Duration = Duration::from_millis(500);
 const RECONNECT_MAX: Duration = Duration::from_secs(30);
@@ -654,14 +668,8 @@ async fn apply_incoming(
             // Read config fresh so a settings change picks up on the
             // next clip without restarting the daemon.
             let cfg = ClientConfig::load().unwrap_or_default();
-            if cfg.clipboard_guard_enabled {
-                clipboard.write_text_guarded(
-                    text.clone(),
-                    GuardSpec {
-                        seconds: cfg.clipboard_guard_seconds,
-                        max_attempts: GUARD_MAX_ATTEMPTS,
-                    },
-                )?;
+            if let Some(spec) = guard_spec(&cfg) {
+                clipboard.write_text_guarded(text.clone(), spec)?;
             } else {
                 clipboard.write_text(text.clone())?;
             }
@@ -679,7 +687,12 @@ async fn apply_incoming(
                 event_id = %event.id,
                 "received image clip"
             );
-            clipboard.write_image(image)?;
+            let cfg = ClientConfig::load().unwrap_or_default();
+            if let Some(spec) = guard_spec(&cfg) {
+                clipboard.write_image_guarded(image, spec)?;
+            } else {
+                clipboard.write_image(image)?;
+            }
             // Clone the image store out under the short lock, then
             // write the encrypted PNG to disk afterwards so the lock
             // doesn't cover disk I/O.
@@ -718,7 +731,13 @@ async fn apply_incoming(
             // bundle it's the folder itself, so Explorer / Finder's
             // Ctrl+V recurses and preserves the directory structure.
             let top_level = files::top_level_entries(&dest).unwrap_or_else(|_| written.clone());
-            if let Err(e) = clipboard.write_file_list(top_level) {
+            let cfg = ClientConfig::load().unwrap_or_default();
+            let write_result = if let Some(spec) = guard_spec(&cfg) {
+                clipboard.write_file_list_guarded(top_level, spec)
+            } else {
+                clipboard.write_file_list(top_level)
+            };
+            if let Err(e) = write_result {
                 warn!(error = %e, "requesting file-list write failed");
             }
             let summary = summarize_incoming_bundle(&written);

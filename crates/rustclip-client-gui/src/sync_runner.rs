@@ -7,10 +7,11 @@
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
-use rustclip_client::clipboard::{self, ClipboardHandle};
+use rustclip_client::clipboard::{self, ClipboardHandle, WriteFailure};
 use tauri::{AppHandle, Emitter};
+use tauri_plugin_notification::NotificationExt;
 use tokio::{sync::Mutex, task::JoinHandle};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum SyncStatus {
@@ -22,6 +23,11 @@ pub enum SyncStatus {
 pub struct SyncRunner {
     handle: Mutex<Option<JoinHandle<()>>>,
     watcher: Mutex<Option<JoinHandle<()>>>,
+    /// Consumes WriteFailure events emitted by the clipboard worker
+    /// when an incoming clip can't be applied (the remote got it, but
+    /// the local paste won't have what the user expects). Fires a
+    /// toast and a transient tray status flicker.
+    failure_consumer: Mutex<Option<JoinHandle<()>>>,
     status: Mutex<SyncStatus>,
     /// Handle to the clipboard worker thread. Populated in `start()`,
     /// cleared in `stop()`. Tauri commands and the tray menu clone the
@@ -43,6 +49,7 @@ impl SyncRunner {
         Self {
             handle: Mutex::new(None),
             watcher: Mutex::new(None),
+            failure_consumer: Mutex::new(None),
             status: Mutex::new(SyncStatus::Stopped),
             clipboard: std::sync::Mutex::new(None),
         }
@@ -77,11 +84,23 @@ impl SyncRunner {
         // the handle on `self` so command handlers can reach it. The
         // original is moved into `run_sync` and dies with the sync task.
         let (event_tx, event_rx) = tokio::sync::mpsc::channel(64);
-        let handle = clipboard::spawn_watcher(event_tx).context("spawning clipboard watcher")?;
+        let (failure_tx, failure_rx) = tokio::sync::mpsc::channel::<WriteFailure>(8);
+        let handle = clipboard::spawn_watcher_with_failures(event_tx, failure_tx)
+            .context("spawning clipboard watcher")?;
         info!("clipboard watcher started");
         if let Ok(mut slot) = self.clipboard.lock() {
             *slot = Some(handle.clone());
         }
+
+        // Side-car that turns each clipboard apply-failure into a
+        // user-visible toast + a transient tray status flicker. The
+        // remote device already has the content; the local paste
+        // won't, so we owe the user an explicit signal.
+        let failure_app = app.clone();
+        let failure_task = tokio::spawn(consume_write_failures(failure_app, failure_rx));
+        let mut fc = self.failure_consumer.lock().await;
+        *fc = Some(failure_task);
+        drop(fc);
 
         let status_cell = Arc::clone(self);
         let emit_app = app.clone();
@@ -129,6 +148,11 @@ impl SyncRunner {
             task.abort();
         }
         drop(watcher);
+        let mut fc = self.failure_consumer.lock().await;
+        if let Some(task) = fc.take() {
+            task.abort();
+        }
+        drop(fc);
         if let Ok(mut slot) = self.clipboard.lock() {
             *slot = None;
         }
@@ -142,5 +166,56 @@ impl SyncRunner {
             *s = status;
         }
         let _ = app.emit("sync-status", status);
+    }
+}
+
+/// Drains [`WriteFailure`] events from the clipboard worker. For each
+/// one: emits a `clip-write-failed` Tauri event the frontend can react
+/// to, fires an OS toast (gated by the user's `notifications_enabled`
+/// preference), and flashes the tray status row. Lives for as long as
+/// the watcher; aborted in [`SyncRunner::stop`].
+async fn consume_write_failures(app: AppHandle, mut rx: tokio::sync::mpsc::Receiver<WriteFailure>) {
+    while let Some(failure) = rx.recv().await {
+        let kind_str = failure.kind.as_str();
+        debug!(kind = kind_str, error = %failure.error, "clipboard write failure surfacing");
+
+        // Frontend listener (currently unwired; safe to ignore until UI
+        // wants to surface it inline somewhere).
+        let _ = app.emit(
+            "clip-write-failed",
+            serde_json::json!({ "kind": kind_str, "error": failure.error }),
+        );
+
+        crate::tray::flash_transient_status(&app, format!("Error applying {kind_str} clip"));
+
+        if notifications_enabled() {
+            let body = format!(
+                "An incoming {kind_str} clip couldn't be placed on the clipboard. \
+                See Settings → Diagnostics for logs."
+            );
+            if let Err(e) = app
+                .notification()
+                .builder()
+                .title("RustClip couldn't paste")
+                .body(body)
+                .show()
+            {
+                warn!(error = %e, "showing write-failure notification failed");
+            }
+        }
+    }
+    debug!("write-failure consumer exiting (channel closed)");
+}
+
+/// Reads the per-device config. Fails open (returns true) so a
+/// transient disk issue doesn't silently eat the user's signal that
+/// something went wrong with paste.
+fn notifications_enabled() -> bool {
+    match rustclip_client::gui_api::get_client_config() {
+        Ok(cfg) => cfg.notifications_enabled,
+        Err(e) => {
+            debug!(error = %e, "reading client config failed; defaulting to notifications enabled");
+            true
+        }
     }
 }
