@@ -267,6 +267,23 @@
         </div>
       </section>
 
+      <section class="card">
+        <header class="card-head">
+          <div>
+            <h2 class="card-title">Diagnostics</h2>
+            <p class="card-sub">Daily-rolling logs stored locally. Open the folder or export a zip if sync misbehaves.</p>
+          </div>
+        </header>
+        <div class="card-body">
+          <div class="row-actions">
+            <button id="open-logs-btn" class="btn btn-ghost">Open logs folder</button>
+            <button id="export-logs-btn" class="btn btn-ghost">Export logs (.zip)</button>
+          </div>
+          <p class="hint"><code id="log-dir-path" class="mono">…</code></p>
+          <p id="diagnostics-msg" class="status" hidden></p>
+        </div>
+      </section>
+
       <p id="settings-msg" class="page-msg" hidden></p>
     </section>
 

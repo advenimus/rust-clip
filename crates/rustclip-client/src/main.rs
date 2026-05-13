@@ -1,7 +1,6 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
-use rustclip_client::commands;
-use tracing_subscriber::{EnvFilter, fmt};
+use rustclip_client::{commands, log_setup};
 
 #[derive(Parser, Debug)]
 #[command(name = "rustclip-client", version, about = "RustClip desktop client")]
@@ -66,7 +65,9 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    init_tracing();
+    // Hold the appender's worker guard for the lifetime of the
+    // process; dropping it would stop the background flush thread.
+    let _log_guard = log_setup::init_dual().ok().flatten();
     let cli = Cli::parse();
     match cli.command {
         Command::Enroll {
@@ -92,11 +93,4 @@ async fn main() -> Result<()> {
         Command::History { limit } => commands::show_history(limit),
         Command::HistoryClear => commands::clear_history(),
     }
-}
-
-fn init_tracing() {
-    let filter = EnvFilter::try_from_env("RUSTCLIP_LOG_LEVEL")
-        .or_else(|_| EnvFilter::try_new("warn,rustclip_client=info"))
-        .expect("static filter");
-    fmt().with_env_filter(filter).init();
 }

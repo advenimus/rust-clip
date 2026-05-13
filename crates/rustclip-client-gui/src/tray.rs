@@ -1,12 +1,14 @@
 //! System tray icon + menu. Rebuilt on status or history change.
 
 use anyhow::Result;
+use rustclip_client::log_setup;
 use tauri::{
     AppHandle, Manager,
     image::Image,
     menu::{Menu, MenuItem, PredefinedMenuItem, Submenu},
     tray::{TrayIcon, TrayIconBuilder},
 };
+use tauri_plugin_opener::OpenerExt;
 use tracing::warn;
 
 use crate::AppState;
@@ -50,6 +52,7 @@ fn build_initial_menu(app: &AppHandle) -> Result<Menu<tauri::Wry>> {
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "open-history", "History…", true, None::<&str>)?,
             &MenuItem::with_id(app, "open-settings", "Settings…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "reveal-logs", "Reveal logs", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "start-sync", "Start sync", true, None::<&str>)?,
             &MenuItem::with_id(app, "stop-sync", "Stop sync", true, None::<&str>)?,
@@ -129,6 +132,7 @@ async fn refresh_menu_inner(app: &AppHandle) -> Result<()> {
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(app, "open-history", "History…", true, None::<&str>)?,
             &MenuItem::with_id(app, "open-settings", "Settings…", true, None::<&str>)?,
+            &MenuItem::with_id(app, "reveal-logs", "Reveal logs", true, None::<&str>)?,
             &PredefinedMenuItem::separator(app)?,
             &MenuItem::with_id(
                 app,
@@ -178,6 +182,17 @@ async fn dispatch(app: &AppHandle, id: &str) -> Result<()> {
         "open-history" => open_or_focus(app, "history")?,
         "open-settings" => open_or_focus(app, "settings")?,
         "open-about" => open_or_focus(app, "about")?,
+        "reveal-logs" => {
+            let dir = log_setup::log_dir();
+            // Best-effort create — opening a missing directory fails on
+            // some platforms with a confusing error. An empty folder is
+            // a clearer signal that nothing has rotated yet.
+            if let Err(e) = std::fs::create_dir_all(&dir) {
+                warn!(error = %e, "creating log dir before reveal failed");
+            }
+            app.opener()
+                .open_path(dir.to_string_lossy().to_string(), None::<&str>)?;
+        }
         "start-sync" => {
             let state: tauri::State<'_, AppState> = app.state();
             let inner = state.lock().await;

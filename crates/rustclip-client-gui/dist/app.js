@@ -86,7 +86,7 @@
       }
       tabs.forEach((t) => t.classList.toggle('is-active', t.dataset.tab === target));
       if (target === 'history') refreshHistory();
-      if (target === 'settings') refreshSettings();
+      if (target === 'settings') { refreshSettings(); refreshLogDir(); }
       if (target === 'about') refreshAbout();
     }
 
@@ -369,6 +369,36 @@
     listen('recopy-hotkey-error', (evt) => {
       const detail = evt && evt.payload ? String(evt.payload) : 'unknown error';
       setSettingsMsg('Could not register shortcut: ' + detail, 'err');
+    });
+
+    // ───────── Diagnostics ─────────
+    const openLogsBtn = document.getElementById('open-logs-btn');
+    const exportLogsBtn = document.getElementById('export-logs-btn');
+    const logDirPath = document.getElementById('log-dir-path');
+    const diagnosticsMsg = document.getElementById('diagnostics-msg');
+
+    function setDiagnosticsMsg(text, cls = '') {
+      if (!text) { diagnosticsMsg.setAttribute('hidden', ''); diagnosticsMsg.textContent = ''; return; }
+      diagnosticsMsg.removeAttribute('hidden');
+      diagnosticsMsg.textContent = text;
+      diagnosticsMsg.className = 'status ' + cls;
+    }
+    async function refreshLogDir() {
+      try { logDirPath.textContent = await invoke('cmd_log_dir'); }
+      catch (err) { logDirPath.textContent = '(unable to resolve: ' + String(err) + ')'; }
+    }
+    openLogsBtn.addEventListener('click', async () => {
+      try { await invoke('cmd_open_log_dir'); setDiagnosticsMsg('Opened logs folder.', 'ok'); }
+      catch (err) { setDiagnosticsMsg(String(err), 'err'); }
+    });
+    exportLogsBtn.addEventListener('click', async () => {
+      setDiagnosticsMsg('Preparing zip…');
+      try {
+        const path = await invoke('cmd_export_logs_zip');
+        setDiagnosticsMsg(path ? 'Saved to ' + path : 'Export cancelled.', path ? 'ok' : '');
+      } catch (err) {
+        setDiagnosticsMsg(String(err), 'err');
+      }
     });
 
     // ───────── History panel ─────────
