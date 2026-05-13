@@ -38,6 +38,36 @@ pub enum ClipEvent {
     Files(Vec<PathBuf>),
 }
 
+/// Which kind of clipboard write hit the OS error path. Used by the
+/// GUI to render a more specific toast.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum WriteKind {
+    Text,
+    Image,
+    Files,
+}
+
+impl WriteKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WriteKind::Text => "text",
+            WriteKind::Image => "image",
+            WriteKind::Files => "files",
+        }
+    }
+}
+
+/// Failure to apply an incoming clip to the OS clipboard. The remote
+/// device already has the content; the local user just won't see it on
+/// paste. The GUI listens for these and surfaces a toast so the user
+/// knows their next paste won't have what they expect.
+#[derive(Debug, Clone)]
+pub struct WriteFailure {
+    pub kind: WriteKind,
+    pub error: String,
+}
+
 /// Decoded PNG image bytes plus dimensions for a round-trip write.
 #[derive(Debug, Clone)]
 pub struct ImageBytes {
@@ -176,6 +206,24 @@ impl ClipboardHandle {
 }
 
 pub fn spawn_watcher(event_tx: mpsc::Sender<ClipEvent>) -> Result<ClipboardHandle> {
+    spawn_watcher_inner(event_tx, None)
+}
+
+/// Like [`spawn_watcher`] but also feeds each clipboard write failure
+/// onto `failure_tx`. The GUI uses this to surface a toast + tray
+/// flicker; the CLI never needs to know (warn! is enough), so it stays
+/// on the plain entry point.
+pub fn spawn_watcher_with_failures(
+    event_tx: mpsc::Sender<ClipEvent>,
+    failure_tx: mpsc::Sender<WriteFailure>,
+) -> Result<ClipboardHandle> {
+    spawn_watcher_inner(event_tx, Some(failure_tx))
+}
+
+fn spawn_watcher_inner(
+    event_tx: mpsc::Sender<ClipEvent>,
+    failure_tx: Option<mpsc::Sender<WriteFailure>>,
+) -> Result<ClipboardHandle> {
     let (cmd_tx, cmd_rx) = stdmpsc::channel::<ClipboardCmd>();
 
     // Probe once up-front on the main thread so we can surface a clean error
@@ -184,13 +232,104 @@ pub fn spawn_watcher(event_tx: mpsc::Sender<ClipEvent>) -> Result<ClipboardHandl
 
     thread::Builder::new()
         .name("rustclip-clipboard".into())
-        .spawn(move || worker_loop(event_tx, cmd_rx))
+        .spawn(move || worker_loop(event_tx, cmd_rx, failure_tx))
         .context("spawning clipboard worker thread")?;
 
     Ok(ClipboardHandle { cmd_tx })
 }
 
-fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<ClipboardCmd>) {
+fn report_failure(failure_tx: &Option<mpsc::Sender<WriteFailure>>, kind: WriteKind, error: &str) {
+    if let Some(tx) = failure_tx {
+        // blocking_send is fine — we're on the dedicated clipboard
+        // thread (no tokio executor running here). A full channel
+        // shouldn't happen in practice; if it does, drop silently
+        // rather than block forever.
+        let _ = tx.try_send(WriteFailure {
+            kind,
+            error: error.to_string(),
+        });
+    }
+}
+
+/// Total attempts (1 initial + up to N-1 retries) when the OS-level
+/// clipboard write hits a transient error. arboard wraps NSPasteboard
+/// / CF_HDROP / X11 / Wayland and all of them have occasional
+/// glitches — AV scanners, focus changes, a clipboard manager briefly
+/// holding the handle — that resolve on the second or third attempt.
+const WRITE_MAX_ATTEMPTS: u32 = 3;
+/// Sleep between retries. Short enough that even a worst-case retry
+/// budget (~100 ms) stays well inside the 500 ms poll interval.
+const WRITE_RETRY_DELAY: Duration = Duration::from_millis(50);
+
+fn set_text_with_retry(cb: &mut Clipboard, text: &str) -> std::result::Result<(), arboard::Error> {
+    let mut last_err: Option<arboard::Error> = None;
+    for attempt in 1..=WRITE_MAX_ATTEMPTS {
+        match cb.set_text(text) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                debug!(attempt, max = WRITE_MAX_ATTEMPTS, error = %e, "set_text failed, will retry");
+                last_err = Some(e);
+                if attempt < WRITE_MAX_ATTEMPTS {
+                    thread::sleep(WRITE_RETRY_DELAY);
+                }
+            }
+        }
+    }
+    Err(last_err.expect("attempted at least once"))
+}
+
+fn set_image_with_retry(
+    cb: &mut Clipboard,
+    image: &ImageBytes,
+) -> std::result::Result<(), arboard::Error> {
+    let mut last_err: Option<arboard::Error> = None;
+    for attempt in 1..=WRITE_MAX_ATTEMPTS {
+        let img = ImageData {
+            width: image.width,
+            height: image.height,
+            bytes: Cow::Borrowed(&image.rgba),
+        };
+        match cb.set_image(img) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                debug!(attempt, max = WRITE_MAX_ATTEMPTS, error = %e, "set_image failed, will retry");
+                last_err = Some(e);
+                if attempt < WRITE_MAX_ATTEMPTS {
+                    thread::sleep(WRITE_RETRY_DELAY);
+                }
+            }
+        }
+    }
+    Err(last_err.expect("attempted at least once"))
+}
+
+fn write_file_list_with_retry(paths: &[PathBuf]) -> anyhow::Result<()> {
+    let mut last_err: Option<anyhow::Error> = None;
+    for attempt in 1..=WRITE_MAX_ATTEMPTS {
+        match clipboard_files::write_file_list(paths) {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                debug!(
+                    attempt,
+                    max = WRITE_MAX_ATTEMPTS,
+                    error = %e,
+                    "file-list write failed, will retry"
+                );
+                last_err = Some(e);
+                if attempt < WRITE_MAX_ATTEMPTS {
+                    thread::sleep(WRITE_RETRY_DELAY);
+                }
+            }
+        }
+    }
+    Err(last_err.expect("attempted at least once"))
+}
+
+fn worker_loop(
+    event_tx: mpsc::Sender<ClipEvent>,
+    cmd_rx: stdmpsc::Receiver<ClipboardCmd>,
+    failure_tx: Option<mpsc::Sender<WriteFailure>>,
+) {
     let mut cb = match Clipboard::new() {
         Ok(c) => c,
         Err(e) => {
@@ -214,61 +353,75 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
         loop {
             match cmd_rx.try_recv() {
                 Ok(ClipboardCmd::WriteText { text, guard }) => {
+                    // Pre-stamp echo-suppression hashes BEFORE the OS
+                    // write so a third-party reader/writer racing the
+                    // very next poll can't trip a spurious echo. Roll
+                    // back atomically if the OS write actually fails —
+                    // otherwise stale hashes would suppress legitimate
+                    // user copies of the prior clipboard content.
                     let hash = sha256(text.as_bytes());
-                    let text_for_guard = if guard.is_some() {
-                        Some(text.clone())
+                    let prev_last_set = last_set;
+                    let prev_last_read = last_read;
+                    let prev_guard = guard_text.clone();
+                    last_set = Some(hash);
+                    last_read = Some(hash);
+                    if let Some(spec) = guard {
+                        guard_text = Some(GuardEntry {
+                            content: text.clone(),
+                            content_hash: hash,
+                            expires_at: Instant::now() + Duration::from_secs(spec.seconds as u64),
+                            attempts_left: spec.max_attempts,
+                        });
                     } else {
-                        None
-                    };
-                    if let Err(e) = cb.set_text(text) {
-                        warn!(error = %e, "clipboard write failed");
-                    } else {
-                        last_set = Some(hash);
-                        last_read = Some(hash);
-                        // Arm the guard atomically with last_set so a
-                        // re-assert tick can't see the new hash without
-                        // also seeing the guard.
-                        if let (Some(spec), Some(content)) = (guard, text_for_guard) {
-                            guard_text = Some(GuardEntry {
-                                content,
-                                content_hash: hash,
-                                expires_at: Instant::now()
-                                    + Duration::from_secs(spec.seconds as u64),
-                                attempts_left: spec.max_attempts,
-                            });
-                        } else {
-                            // A non-guarded write (manual recopy etc.)
-                            // implicitly cancels any prior guard — the
-                            // user is moving on.
-                            guard_text = None;
-                        }
+                        // A non-guarded write (manual recopy etc.)
+                        // implicitly cancels any prior guard — the
+                        // user is moving on.
+                        guard_text = None;
+                    }
+                    if let Err(e) = set_text_with_retry(&mut cb, &text) {
+                        warn!(error = %e, "clipboard write failed after retries");
+                        last_set = prev_last_set;
+                        last_read = prev_last_read;
+                        guard_text = prev_guard;
+                        report_failure(&failure_tx, WriteKind::Text, &e.to_string());
                     }
                 }
                 Ok(ClipboardCmd::WriteImage(image)) => {
                     let hash = hash_image(&image);
-                    let img = ImageData {
-                        width: image.width,
-                        height: image.height,
-                        bytes: Cow::Owned(image.rgba),
-                    };
-                    if let Err(e) = cb.set_image(img) {
-                        warn!(error = %e, "clipboard image write failed");
-                    } else {
-                        last_set = Some(hash);
-                        last_read = Some(hash);
-                        last_image_write_at = Some(Instant::now());
+                    let prev_last_set = last_set;
+                    let prev_last_read = last_read;
+                    let prev_image_write_at = last_image_write_at;
+                    last_set = Some(hash);
+                    last_read = Some(hash);
+                    last_image_write_at = Some(Instant::now());
+                    if let Err(e) = set_image_with_retry(&mut cb, &image) {
+                        warn!(error = %e, "clipboard image write failed after retries");
+                        last_set = prev_last_set;
+                        last_read = prev_last_read;
+                        last_image_write_at = prev_image_write_at;
+                        report_failure(&failure_tx, WriteKind::Image, &e.to_string());
                     }
                 }
                 Ok(ClipboardCmd::WriteFileList(paths)) => {
                     // Bump the echo-suppression hash BEFORE the actual
                     // pasteboard write so the next poll can't sneak in a
-                    // read between the write and the hash update.
+                    // read between the write and the hash update. Roll
+                    // back the same trio on failure so a stale file-list
+                    // hash doesn't outlive the failed attempt — the
+                    // previous fix pre-stamped but never restored.
                     let hash = files::hash_path_list(&paths);
+                    let prev_last_set_files = last_set_files;
+                    let prev_last_read_files = last_read_files;
+                    let prev_files_write_at = last_files_write_at;
                     last_set_files = Some(hash);
                     last_read_files = Some(hash);
                     last_files_write_at = Some(Instant::now());
-                    if let Err(e) = clipboard_files::write_file_list(&paths) {
-                        warn!(error = %e, "clipboard file-list write failed");
+                    if let Err(e) = write_file_list_with_retry(&paths) {
+                        warn!(error = %e, "clipboard file-list write failed after retries");
+                        last_set_files = prev_last_set_files;
+                        last_read_files = prev_last_read_files;
+                        last_files_write_at = prev_files_write_at;
+                        report_failure(&failure_tx, WriteKind::Files, &e.to_string());
                     }
                 }
                 Ok(ClipboardCmd::Shutdown) | Err(stdmpsc::TryRecvError::Disconnected) => {
@@ -366,7 +519,7 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
                     let attempts_left = g.attempts_left;
                     let hash = g.content_hash;
                     let content = g.content.clone();
-                    match cb.set_text(content) {
+                    match set_text_with_retry(&mut cb, &content) {
                         Ok(()) => {
                             last_set = Some(hash);
                             last_read = Some(hash);
@@ -378,6 +531,7 @@ fn worker_loop(event_tx: mpsc::Sender<ClipEvent>, cmd_rx: stdmpsc::Receiver<Clip
                         Err(e) => {
                             warn!(error = %e, "clipboard guard re-assert failed");
                             guard_text = None;
+                            report_failure(&failure_tx, WriteKind::Text, &e.to_string());
                         }
                     }
                     // Don't fall through to the normal text / image
